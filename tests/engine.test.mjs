@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ORIGIN, DEMO, validate, createCourses, toAgentConditions, coursesFocus, timeWindow, typicalStay } from "../src/engine.mjs";
+import { ORIGIN, DEMO, validate, createCourses, toAgentConditions, coursesFocus, timeWindow, typicalStay, uniqueCourses, placeMapsUrl } from "../src/engine.mjs";
 import { recommend } from "../server/index.mjs";
 import { coverageCenters, isInYongsan } from "../src/region.mjs";
 import { searchPlaces } from "../src/maps.js";
@@ -45,6 +45,32 @@ test("default courses stay within typical dwell and budget", () => {
   }
   const focus = coursesFocus(ORIGIN, [courses[0]]);
   assert.ok(Number.isFinite(focus.lat) && Number.isFinite(focus.lng));
+  for (let i = 0; i < courses.length; i++) {
+    for (let j = i + 1; j < courses.length; j++) {
+      const a = new Set(courses[i].stops.map((p) => p.id));
+      const b = new Set(courses[j].stops.map((p) => p.id));
+      const overlap = [...a].filter((id) => b.has(id)).length;
+      const union = new Set([...a, ...b]).size;
+      assert.ok(overlap <= 1);
+      assert.ok(overlap / union < 0.5);
+    }
+  }
+});
+test("low-review places beat famous landmarks by default", () => {
+  const famous = DEMO.map((p, i) => ({ ...p, id: "famous" + i, ratingCount: 5000, quiet: false }));
+  const quiet = DEMO.map((p, i) => ({
+    ...p,
+    id: "quiet" + i,
+    lat: p.lat + 0.0004,
+    lng: p.lng + 0.0004,
+    ratingCount: 40,
+    quiet: true,
+  }));
+  const courses = createCourses([...famous, ...quiet], c);
+  assert.ok(courses.length);
+  const ids = courses.flatMap((route) => route.stops.map((stop) => stop.id));
+  assert.ok(ids.some((id) => id.startsWith("quiet")));
+  assert.ok(ids.filter((id) => id.startsWith("quiet")).length >= ids.filter((id) => id.startsWith("famous")).length);
 });
 test("zero budget permits only free courses", () => {
   for (const r of createCourses(DEMO, { ...c, budget: 0 }))
@@ -88,14 +114,43 @@ test("bad schema, impossible date and injection rejected", () => {
   ])
     assert.throws(() => validate({ ...c, ...patch }));
 });
-test("cafe and quiet styles filter place types and keep output contract", () => {
-  const courses = createCourses(DEMO, { ...c, styles: ["cafe", "quiet"] });
-  assert.ok(courses.length);
-  for (const r of courses) {
+test("food and play keywords filter meal places", () => {
+  const meals = createCourses(DEMO, { ...c, styles: ["food"] });
+  assert.ok(meals.length);
+  for (const r of meals)
     for (const p of r.stops) assert.ok(["cafe", "food"].includes(p.type));
-    assert.equal(r.estimated_cost.currency, "KRW");
-    assert.equal(r.route_info.estimated, true);
-  }
+  const play = createCourses(DEMO, { ...c, styles: ["play"] });
+  assert.ok(play.length);
+  for (const r of play)
+    for (const p of r.stops) assert.ok(!["cafe", "food"].includes(p.type));
+});
+test("pacing keywords stretch or pack stay time", () => {
+  const relaxed = createCourses(DEMO, { ...c, styles: ["relaxed"] });
+  const eager = createCourses(DEMO, { ...c, styles: ["eager"] });
+  assert.ok(relaxed.length && eager.length);
+  assert.ok(relaxed[0].stops[0].stay > DEMO.find((p) => p.id === relaxed[0].stops[0].id).stay);
+  assert.ok(eager[0].stops[0].stay < DEMO.find((p) => p.id === eager[0].stops[0].id).stay);
+  assert.ok(Math.max(...eager.map((r) => r.stops.length)) >= Math.max(...relaxed.map((r) => r.stops.length)));
+});
+test("exhibit and hidden keywords prefer museums and low-review places", () => {
+  const exhibit = createCourses(DEMO, { ...c, styles: ["exhibit"] });
+  assert.ok(exhibit.length);
+  for (const r of exhibit)
+    for (const p of r.stops) assert.equal(p.type, "culture");
+  const famous = DEMO.map((p, i) => ({ ...p, id: "famous" + i, rating: 4.6, ratingCount: 5000, quiet: false }));
+  const gems = DEMO.map((p, i) => ({
+    ...p,
+    id: "gem" + i,
+    lat: p.lat + 0.0005,
+    lng: p.lng + 0.0005,
+    rating: 4.6,
+    ratingCount: 30,
+    quiet: true,
+  }));
+  const courses = createCourses([...famous, ...gems], { ...c, styles: ["hidden"] });
+  assert.ok(courses.length);
+  const ids = courses.flatMap((r) => r.stops.map((s) => s.id));
+  assert.ok(ids.filter((id) => id.startsWith("gem")).length >= ids.filter((id) => id.startsWith("famous")).length);
 });
 test("end time and play hours fill the same window", () => {
   const byEnd = createCourses(DEMO, { ...c, timeMode: "end", endTime: "14:00" });
@@ -111,7 +166,7 @@ test("end time and play hours fill the same window", () => {
   assert.ok(Math.max(...long.map((r) => r.duration)) > Math.max(...byHours.map((r) => r.duration)));
 });
 test("why keywords prefer user terms and meal slots", () => {
-  const courses = createCourses(DEMO, { ...c, keyword: "커피", time: "12:00", endTime: "16:00", styles: ["cafe"] });
+  const courses = createCourses(DEMO, { ...c, keyword: "커피", time: "12:00", endTime: "16:00", styles: ["food"] });
   assert.ok(courses.length);
   const cafeStop = courses[0].stops.find((p) => p.type === "cafe" || p.type === "food");
   assert.ok(cafeStop);
@@ -204,12 +259,13 @@ test("multi-center Places search deduplicates and excludes non-Yongsan results",
           { id: "outside", displayName: "구 밖 장소", location: { lat: () => 37.5445, lng: () => 127.0438 }, types: ["cafe"] },
         ] };
       } },
-      SearchNearbyRankPreference: { POPULARITY: "POPULARITY" },
+      SearchNearbyRankPreference: { POPULARITY: "POPULARITY", DISTANCE: "DISTANCE" },
     }) } } };
     const result = await searchPlaces({ ...c, radius: 8000 });
     assert.deepEqual(result.map((place) => place.id), ["inside"]);
     assert.ok(requests.length > 1 && requests.length <= 15);
     assert.ok(requests.every((request) => request.maxResultCount === 20));
+    assert.ok(requests.every((request) => request.rankPreference === "DISTANCE"));
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
@@ -229,13 +285,38 @@ test("coarse parks are replaced with nearby detailed places", async () => {
           { id: "big-park", displayName: "용산공원", location: { lat: () => ORIGIN.lat, lng: () => ORIGIN.lng }, types: ["park"] },
         ] };
       } },
-      SearchNearbyRankPreference: { POPULARITY: "POPULARITY" },
+      SearchNearbyRankPreference: { POPULARITY: "POPULARITY", DISTANCE: "DISTANCE" },
     }) } } };
-    const result = await searchPlaces({ ...c, radius: 800, styles: ["nature"] });
+    const result = await searchPlaces({ ...c, radius: 800, styles: ["play"] });
     assert.ok(result.some((place) => place.id === "inside-cafe"));
     assert.equal(result.some((place) => place.id === "big-park"), false);
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
   }
+});
+test("course path is a straight line through origin and stops", () => {
+  const [course] = createCourses(DEMO, c);
+  assert.equal(course.path.length, course.stops.length + 1);
+  assert.equal(course.path[0].lat, ORIGIN.lat);
+  assert.equal(course.path[0].lng, ORIGIN.lng);
+  course.stops.forEach((stop, i) => {
+    assert.equal(course.path[i + 1].lat, stop.lat);
+    assert.equal(course.path[i + 1].lng, stop.lng);
+  });
+  assert.equal(course.route_info.estimated, true);
+  const perm = { ...course, id: "perm", stops: [...course.stops].reverse() };
+  assert.equal(uniqueCourses([course, perm]).length, 1);
+});
+test("placeMapsUrl keeps Google links and falls back to coordinates", () => {
+  assert.equal(placeMapsUrl({ mapsUrl: "https://maps.google.com/?cid=99" }), "https://maps.google.com/?cid=99");
+  assert.equal(placeMapsUrl({ mapsUrl: "https://evil.example/maps" }), "");
+  const fallback = placeMapsUrl({ mapsUrl: "javascript:alert(1)", lat: ORIGIN.lat, lng: ORIGIN.lng });
+  assert.match(fallback, /^https:\/\/www\.google\.com\/maps\/search\//);
+  const url = placeMapsUrl({ id: "ChIJabc12345", name: "공원", lat: ORIGIN.lat, lng: ORIGIN.lng });
+  assert.match(url, /google\.com\/maps\/search/);
+  assert.match(url, /query_place_id=ChIJabc12345/);
+  const [course] = createCourses(DEMO, c);
+  for (const stop of course.stops)
+    assert.match(placeMapsUrl(stop), /^https:\/\/www\.google\.com\/maps\/search\//);
 });

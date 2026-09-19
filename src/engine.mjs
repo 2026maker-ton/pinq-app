@@ -189,10 +189,54 @@ export const DEMO = rows.map((r, i) => ({
   demo: true,
 }));
 export const money = (n) => Math.round(n).toLocaleString("ko-KR") + "원";
-export const STYLE_ENUM = ["cafe", "culture", "nature", "local", "quiet"];
-const PLACE_STYLES = ["cafe", "culture", "nature"];
-function matchesPlaceStyle(place, style) {
-  return place.type === style || (style === "cafe" && place.type === "food");
+const GOOGLE_MAPS_HOST = /^(www\.|maps\.)?google\.[a-z.]+$/i;
+export function placeMapsUrl(place) {
+  const raw = typeof place?.mapsUrl === "string" ? place.mapsUrl.trim() : "";
+  if (raw) {
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol === "https:" && GOOGLE_MAPS_HOST.test(parsed.hostname))
+        return raw.slice(0, 500);
+    } catch {
+      // Fall through to a coordinate search URL.
+    }
+  }
+  const lat = Number(place?.lat), lng = Number(place?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "";
+  const url = new URL("https://www.google.com/maps/search/");
+  url.searchParams.set("api", "1");
+  url.searchParams.set("query", `${lat},${lng}`);
+  const id = typeof place?.id === "string" && !place.id.startsWith("demo") && place.id.length > 8 ? place.id : "";
+  if (id) url.searchParams.set("query_place_id", id);
+  return url.toString().slice(0, 500);
+}
+export const STYLE_ENUM = ["relaxed", "tight", "eager", "play", "exhibit", "food", "hidden"];
+const STYLE_WHY = {
+  relaxed: "한가함",
+  tight: "빡빡함",
+  eager: "열정적",
+  play: "놀이",
+  exhibit: "관람",
+  food: "먹거리",
+  hidden: "숨은명소",
+};
+function hasStyle(c, id) {
+  return Array.isArray(c?.styles) && c.styles.includes(id);
+}
+function isMealPlace(place) {
+  return place?.type === "cafe" || place?.type === "food";
+}
+function isExhibitPlace(place) {
+  const types = Array.isArray(place?.types) ? place.types : [];
+  return place?.type === "culture" || types.some((t) => t === "museum" || t === "art_gallery");
+}
+function isHiddenGem(place) {
+  const rating = Number(place?.rating);
+  const count = Number(place?.ratingCount);
+  const high = !Number.isFinite(rating) || rating >= 4;
+  const few = !Number.isFinite(count) || count <= 250;
+  if (place?.demo) return !!place.quiet && few;
+  return high && few && !(Number.isFinite(count) && count > 250);
 }
 function hoursKnown(place) {
   if (place.demo && Number.isFinite(place.open) && Number.isFinite(place.close))
@@ -261,7 +305,7 @@ export function timeWindow(c) {
   );
   return { start, end };
 }
-function travelMinutes(meters, transport) {
+export function travelMinutes(meters, transport) {
   return (
     Math.max(
       3,
@@ -293,6 +337,11 @@ const SHOP_TYPES = [
   "meal_delivery",
 ];
 const KIND_WHY = { nature: "공원", culture: "문화", cafe: "카페", food: "식사" };
+export function fame(place) {
+  const n = Number(place?.ratingCount);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.log10(1 + n);
+}
 export function typicalStay(place) {
   if (place?.demo && Number.isFinite(place.stay) && place.stay > 0) return place.stay;
   const types = Array.isArray(place?.types) ? place.types : [];
@@ -301,6 +350,19 @@ export function typicalStay(place) {
   if (place?.type === "cafe") return 45;
   if (place?.type === "food") return 60;
   return 40;
+}
+export function stayMinutes(place, c) {
+  const base = typicalStay(place);
+  if (hasStyle(c, "relaxed")) return Math.round(base * 1.45);
+  if (hasStyle(c, "eager")) return Math.max(18, Math.round(base * 0.65));
+  if (hasStyle(c, "tight")) return Math.max(20, Math.round(base * 0.85));
+  return base;
+}
+export function moveMinutes(meters, c) {
+  const base = travelMinutes(meters, c?.transport);
+  if (hasStyle(c, "relaxed")) return Math.round(base * 1.5);
+  if (hasStyle(c, "eager")) return Math.max(2, Math.round(base * 0.8));
+  return base;
 }
 export function payee(place) {
   const types = Array.isArray(place?.types) ? place.types : [];
@@ -331,24 +393,17 @@ export function placeWhy(place, c, arrival) {
   if (why.length >= 2) return why.slice(0, 2);
   for (const style of c.styles || []) {
     if (why.length >= 2) break;
-    if (style === "cafe" && matchesPlaceStyle(place, "cafe") && !why.includes("카페"))
-      why.push("카페");
-    else if (style === "culture" && place.type === "culture" && !why.includes("문화"))
-      why.push("문화");
-    else if (style === "nature" && place.type === "nature" && !why.includes("공원"))
-      why.push("공원");
-    else if (style === "local" && place.local && !why.includes("동네")) why.push("동네");
-    else if (style === "quiet" && place.quiet && !why.includes("한적")) why.push("한적");
+    const tag = STYLE_WHY[style];
+    if (tag && !why.includes(tag)) why.push(tag);
   }
   if (!why.length) why.push(KIND_WHY[place.type] || "추천");
   return why.slice(0, 2);
 }
 export function styleSearchGroups(styles = []) {
-  const groups = [];
-  if (styles.includes("cafe")) groups.push("food");
-  if (styles.includes("culture")) groups.push("culture");
-  if (styles.includes("nature")) groups.push("nature");
-  return groups.length ? groups : ["food", "culture", "nature"];
+  if (styles.includes("food")) return ["food"];
+  if (styles.includes("exhibit")) return ["culture"];
+  if (styles.includes("play")) return ["nature", "culture"];
+  return ["food", "culture", "nature"];
 }
 export function coursesFocus(origin, courses = []) {
   const points = [origin];
@@ -442,6 +497,10 @@ export function shapeCourse(route, c) {
       legs,
     },
     unknown: stops.some((stop) => stop.business_status === "unknown"),
+    path: [
+      { lat: c.origin.lat, lng: c.origin.lng },
+      ...stops.map((stop) => ({ lat: stop.lat, lng: stop.lng })),
+    ],
   };
 }
 export function distance(a, b) {
@@ -512,9 +571,9 @@ export function validate(input) {
   return c;
 }
 function visitStep(place, prev, t, end, c, weekday, spent) {
-  const stay = typicalStay(place);
+  const stay = stayMinutes(place, c);
   const meters = distance(prev, place) * 1.3;
-  const minutes = travelMinutes(meters, c.transport);
+  const minutes = moveMinutes(meters, c);
   const arrival = t + minutes;
   const leave = arrival + stay;
   if (leave > end || leave >= 1440) return null;
@@ -530,13 +589,19 @@ function visitStep(place, prev, t, end, c, weekday, spent) {
   if (spent + cost > c.budget) return null;
   return { meters, minutes, arrival, leave, business_status, cost, stay };
 }
-function packCourse(seed, candidates, c, start, end, weekday, preferLocal, preferQuiet) {
+function skipPlace(place, c) {
+  const count = Number(place?.ratingCount);
+  if (hasStyle(c, "hidden") && Number.isFinite(count) && count > 400) return true;
+  return false;
+}
+function packCourse(seed, candidates, c, start, end, weekday) {
   const used = new Set();
   const stops = [];
   let prev = c.origin,
     t = start,
     totalMeters = 0,
     spent = 0;
+  const cap = hasStyle(c, "relaxed") ? 4 : hasStyle(c, "tight") ? 6 : 8;
   const add = (place, step) => {
     used.add(place.id);
     stops.push({
@@ -555,18 +620,23 @@ function packCourse(seed, candidates, c, start, end, weekday, preferLocal, prefe
     prev = place;
   };
   if (seed) {
+    if (skipPlace(seed, c)) return null;
     const step = visitStep(seed, prev, t, end, c, weekday, spent);
     if (!step) return null;
     add(seed, step);
   }
-  while (stops.length < 8) {
+  while (stops.length < cap) {
     let best = null;
     for (const place of candidates) {
-      if (used.has(place.id)) continue;
+      if (used.has(place.id) || skipPlace(place, c)) continue;
       const step = visitStep(place, prev, t, end, c, weekday, spent);
       if (!step) continue;
       const typeBonus = stops.some((s) => s.type === place.type) ? 0 : 80;
-      const rank = step.meters - typeBonus;
+      const hiddenBias = hasStyle(c, "hidden")
+        ? (isHiddenGem(place) ? -160 : fame(place) * 40)
+        : fame(place) * 90;
+      const eagerBias = hasStyle(c, "eager") ? step.stay : 0;
+      const rank = step.meters - typeBonus + hiddenBias + eagerBias;
       if (!best || rank < best.rank) best = { place, step, rank };
     }
     if (!best) break;
@@ -596,6 +666,8 @@ function packCourse(seed, candidates, c, start, end, weekday, preferLocal, prefe
     quiet = stops.filter((p) => p.quiet).length,
     diversity = new Set(stops.map((p) => p.type)).size;
   const fill = end > start ? duration / (end - start) : 0;
+  const fameSum = stops.reduce((sum, stop) => sum + fame(stop), 0);
+  const gems = stops.filter(isHiddenGem).length;
   return {
     id: stops.map((p) => p.id).join("-"),
     stops,
@@ -611,21 +683,55 @@ function packCourse(seed, candidates, c, start, end, weekday, preferLocal, prefe
     local,
     quiet,
     score:
-      fill * 24 +
-      (preferLocal ? local * 12 : 0) +
-      (preferQuiet ? quiet * 12 : 0) +
-      (preferLocal || preferQuiet ? 0 : diversity * 12) +
+      fill * (hasStyle(c, "tight") ? 40 : 24) +
+      (hasStyle(c, "eager") ? stops.length * 18 : 0) +
+      (hasStyle(c, "relaxed") ? (1 - fill) * 16 : 0) +
+      (hasStyle(c, "hidden") ? gems * 14 : 0) +
+      diversity * 8 +
       local * 2 +
       quiet -
+      fameSum * (hasStyle(c, "hidden") ? 14 : 8) -
       totalMeters / 2000 -
       total / 100000,
   };
 }
+function sectorSeeds(origin, candidates) {
+  const sectors = [[], [], []];
+  for (const place of candidates) {
+    const angle = Math.atan2(place.lng - origin.lng, place.lat - origin.lat);
+    const index = Math.floor(((angle + Math.PI) / (2 * Math.PI)) * 3) % 3;
+    sectors[index].push(place);
+  }
+  return sectors
+    .map((list) =>
+      [...list].sort(
+        (a, b) => fame(a) - fame(b) || distance(origin, a) - distance(origin, b),
+      )[0],
+    )
+    .filter(Boolean);
+}
+function usedNearby(place, takenStops, meters = 200) {
+  return takenStops.some((stop) => distance(place, stop) < meters);
+}
+function majoritySame(a, b) {
+  const left = new Set((a?.stops || []).map((stop) => stop.id));
+  const right = new Set((b?.stops || []).map((stop) => stop.id));
+  if (!left.size || !right.size) return false;
+  const overlap = [...left].filter((id) => right.has(id)).length;
+  return overlap / new Set([...left, ...right]).size >= 0.5;
+}
+export function uniqueCourses(courses, limit = 3) {
+  const kept = [];
+  for (const course of courses || []) {
+    if (!course?.stops?.length) continue;
+    if (kept.some((other) => majoritySame(other, course))) continue;
+    kept.push(course);
+    if (kept.length === limit) break;
+  }
+  return kept;
+}
 export function createCourses(raw, input) {
   const c = validate(input);
-  const typeStyles = c.styles.filter((style) => PLACE_STYLES.includes(style));
-  const preferLocal = c.styles.includes("local");
-  const preferQuiet = c.styles.includes("quiet");
   let candidates = raw.filter(
     (p) =>
       Number.isFinite(p.lat) &&
@@ -639,10 +745,16 @@ export function createCourses(raw, input) {
       distance(c.origin, p) <= c.radius &&
       (p.capacity == null || p.capacity >= c.people),
   );
-  if (typeStyles.length)
-    candidates = candidates.filter((p) =>
-      typeStyles.some((style) => matchesPlaceStyle(p, style)),
-    );
+  if (hasStyle(c, "food"))
+    candidates = candidates.filter(isMealPlace);
+  else if (hasStyle(c, "play"))
+    candidates = candidates.filter((p) => !isMealPlace(p));
+  if (hasStyle(c, "exhibit"))
+    candidates = candidates.filter(isExhibitPlace);
+  if (hasStyle(c, "hidden")) {
+    const gems = candidates.filter(isHiddenGem);
+    if (gems.length >= 4) candidates = gems;
+  }
   const tokens = c.keyword
     .trim()
     .split(/[,，\s]+/)
@@ -669,47 +781,59 @@ export function createCourses(raw, input) {
       : Math.min(rawEnd, 1260);
   if (end <= start) return [];
   const span = end - start;
-  const slackReserve = Math.min(
-    Math.max(15, Math.round(span * 0.1)),
-    Math.max(0, Math.floor(span / 3)),
-  );
+  const slackReserve = hasStyle(c, "tight") || hasStyle(c, "eager")
+    ? 0
+    : hasStyle(c, "relaxed")
+      ? Math.min(Math.max(25, Math.round(span * 0.22)), Math.max(0, Math.floor(span / 2)))
+      : Math.min(
+          Math.max(15, Math.round(span * 0.1)),
+          Math.max(0, Math.floor(span / 3)),
+        );
   const packEnd = end - slackReserve > start ? end - slackReserve : end;
+  const tryPack = (seed, pool) =>
+    packCourse(seed, pool, c, start, packEnd, weekday) ||
+    (packEnd < end
+      ? packCourse(seed, pool, c, start, end, weekday)
+      : null);
   const ordered = [...candidates].sort(
-    (a, b) => distance(c.origin, a) - distance(c.origin, b),
+    (a, b) => fame(a) - fame(b) || distance(c.origin, a) - distance(c.origin, b),
   );
+  const seedList = [];
+  const seenSeed = new Set();
+  for (const place of [...sectorSeeds(c.origin, candidates), ...ordered]) {
+    if (!place || seenSeed.has(place.id)) continue;
+    seenSeed.add(place.id);
+    seedList.push(place);
+  }
   const packed = [];
-  for (const seed of [null, ...ordered]) {
-    const route =
-      packCourse(
-        seed,
-        candidates,
-        c,
-        start,
-        packEnd,
-        weekday,
-        preferLocal,
-        preferQuiet,
-      ) ||
-      (packEnd < end
-        ? packCourse(
-            seed,
-            candidates,
-            c,
-            start,
-            end,
-            weekday,
-            preferLocal,
-            preferQuiet,
-          )
-        : null);
-    if (!route || packed.some((r) => r.id === route.id)) continue;
-    const last = route.stops[route.stops.length - 1];
-    route.slack = Math.max(0, end - (last.arrival + last.stay));
-    packed.push(route);
+  const taken = new Set();
+  const takenStops = [];
+  for (const allowOverlap of [0, 1]) {
+    for (const seed of [null, ...seedList]) {
+      if (seed && allowOverlap === 0 && (taken.has(seed.id) || usedNearby(seed, takenStops))) continue;
+      const pool = candidates.filter((place) => {
+        if (taken.has(place.id)) return allowOverlap > 0;
+        if (allowOverlap === 0 && usedNearby(place, takenStops)) return false;
+        return true;
+      });
+      const route = tryPack(seed && (allowOverlap > 0 || !taken.has(seed.id)) ? seed : null, pool);
+      if (!route || packed.some((r) => r.id === route.id || majoritySame(r, route))) continue;
+      const overlap = route.stops.filter((stop) => taken.has(stop.id) || usedNearby(stop, takenStops)).length;
+      if (overlap > allowOverlap) continue;
+      const last = route.stops[route.stops.length - 1];
+      route.slack = Math.max(0, end - (last.arrival + last.stay));
+      route.score -= overlap * 25;
+      packed.push(route);
+      for (const stop of route.stops) {
+        taken.add(stop.id);
+        takenStops.push(stop);
+      }
+      if (packed.length === 3) break;
+    }
     if (packed.length === 3) break;
   }
   packed.sort((a, b) => b.score - a.score);
-  return packed.map((route) => shapeCourse(route, c));
+  return uniqueCourses(packed.map((route) => shapeCourse(route, c)));
 }
 // Demonstration coordinates are generated around the selected origin; these are fictional places.
 export function demoPlaces(origin) {

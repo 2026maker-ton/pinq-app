@@ -141,19 +141,23 @@ export default function MapView({
       marker.addListener("click", () => onFocusRef.current(p.id));
       return marker;
     });
-    const lines = (courses.length ? courses.map((course, i) => ({ course, i })) : stops.length ? [{ course: { stops }, i: selected }] : [])
+    const lines = [];
+    (courses.length ? courses.map((course, i) => ({ course, i })) : stops.length ? [{ course: { stops }, i: selected }] : [])
       .sort((a, b) => Number(a.i === selected) - Number(b.i === selected))
-      .map(({ course, i }) => {
+      .forEach(({ course, i }) => {
         const active = i === selected;
-        return new maps.Polyline({
+        const color = routeColors[i] || selectedColor;
+        const path = [origin, ...(course.stops ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))];
+        lines.push(new maps.Polyline({
           map,
-          path: [origin, ...(course.stops ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))],
-          strokeColor: routeColors[i] || selectedColor,
-          strokeOpacity: active ? 1 : 0.32,
-          strokeWeight: active ? 7 : 3,
+          path,
+          geodesic: false,
+          strokeColor: color,
+          strokeOpacity: active ? 1 : 0.18,
+          strokeWeight: active ? 7 : 2,
           zIndex: active ? 3 : 1,
           clickable: false,
-        });
+        }));
       });
     return () => {
       markers.forEach((m) => {
@@ -209,7 +213,7 @@ export default function MapView({
           </div>
         )}
         <span className="map-caption">
-          지도를 클릭해 출발점 선택 · 연결선은 방문 순서 표시
+          지도를 클릭해 출발점 선택 · 경로는 도보·자전거·대중교통 길찾기
         </span>
       </div>
     );
@@ -258,7 +262,8 @@ export default function MapView({
         />
         {demoRoutes.map((course, i) => {
           const active = i === selected || demoRoutes.length === 1;
-          const points = [originPos, ...course.stops.map(xy)].map((p) => `${p.x},${p.y}`).join(" ");
+          const points = (course.path?.length > 1 ? course.path.map(xy) : [originPos, ...course.stops.map(xy)])
+            .map((p) => `${p.x},${p.y}`).join(" ");
           return <polyline key={course.id || i} points={points} fill="none" stroke={routeColors[i] || selectedColor} strokeWidth={active ? 1.4 : 0.55} strokeOpacity={active ? 1 : 0.35} strokeLinecap="round" strokeLinejoin="round" />;
         })}
       </svg>

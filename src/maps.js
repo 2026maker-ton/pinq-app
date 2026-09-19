@@ -84,19 +84,18 @@ function mapPlace(p) {
   return mapped;
 }
 
-function evenlySpread(places, count, origin) {
-  if (places.length <= count) return places;
+function pickObscureSpread(places, count, origin) {
   const meters = (a, b) => Math.hypot((a.lat - b.lat) * 111195, (a.lng - b.lng) * 88000);
-  const remaining = [...places];
-  remaining.sort((a, b) => meters(origin, a) - meters(origin, b));
-  const chosen = [remaining.shift()];
+  if (places.length <= count)
+    return [...places].sort((a, b) => (a.ratingCount || 0) - (b.ratingCount || 0) || meters(origin, a) - meters(origin, b));
+  const remaining = [...places].sort(
+    (a, b) => (a.ratingCount || 0) - (b.ratingCount || 0) || meters(origin, a) - meters(origin, b),
+  );
+  const chosen = [];
+  const minGap = 180;
   while (chosen.length < count && remaining.length) {
-    let best = 0, max = -1;
-    for (let i = 0; i < remaining.length; i++) {
-      const spread = Math.min(...chosen.map((p) => meters(p, remaining[i])));
-      if (spread > max) { max = spread; best = i; }
-    }
-    chosen.push(remaining.splice(best, 1)[0]);
+    const index = remaining.findIndex((place) => chosen.every((pick) => meters(pick, place) >= minGap));
+    chosen.push(remaining.splice(index >= 0 ? index : 0, 1)[0]);
   }
   return chosen;
 }
@@ -104,9 +103,16 @@ function evenlySpread(places, count, origin) {
 function pickPlaces(list, count, origin) {
   const fine = list.filter((p) => !isCoarse(p));
   const coarse = list.filter(isCoarse);
-  const picked = evenlySpread(fine, count, origin);
+  const obscure = fine.filter((p) => !Number.isFinite(p.ratingCount) || p.ratingCount < 800);
+  const famous = fine.filter((p) => Number.isFinite(p.ratingCount) && p.ratingCount >= 800);
+  const picked = pickObscureSpread(obscure.length ? obscure : fine, count, origin);
+  const have = new Set(picked.map((p) => p.id));
   if (picked.length < count)
-    picked.push(...evenlySpread(coarse, count - picked.length, origin));
+    picked.push(...pickObscureSpread(famous.filter((p) => !have.has(p.id)), count - picked.length, origin));
+  if (picked.length < count) {
+    const still = new Set(picked.map((p) => p.id));
+    picked.push(...pickObscureSpread(coarse.filter((p) => !still.has(p.id)), count - picked.length, origin));
+  }
   return picked;
 }
 
@@ -154,7 +160,7 @@ export async function searchPlaces(c) {
         fields: FIELDS,
         locationRestriction: { center, radius: Math.min(c.radius, 2400) },
         includedTypes: GROUPS[group], maxResultCount: 20,
-        rankPreference: SearchNearbyRankPreference.POPULARITY,
+        rankPreference: SearchNearbyRankPreference.DISTANCE,
       })));
     for (const result of batch) if (result.status === "fulfilled") {
       successes++;
@@ -182,5 +188,5 @@ export async function searchPlaces(c) {
   const desired = groups.length === 1 ? { nature: 48, culture: 48, cafe: 48, food: 48 } :
     { nature: 12, culture: 16, cafe: 10, food: 10 };
   const selected = Object.entries(byType).flatMap(([type, list]) => pickPlaces(list, desired[type], c.origin));
-  return refineCoarse(Place, SearchNearbyRankPreference.POPULARITY, selected.slice(0, 48), unique);
+  return refineCoarse(Place, SearchNearbyRankPreference.DISTANCE, selected.slice(0, 48), unique);
 }

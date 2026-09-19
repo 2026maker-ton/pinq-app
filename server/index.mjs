@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createCourses, validate, demoPlaces, typicalStay } from "../src/engine.mjs";
+import { createCourses, validate, demoPlaces, typicalStay, placeMapsUrl } from "../src/engine.mjs";
 import { isInYongsan } from "../src/region.mjs";
 const PORT = 3001;
 function normalizePlaces(input) {
@@ -64,7 +64,7 @@ function normalizePlaces(input) {
       periods,
       rating: Number.isFinite(p.rating) && p.rating >= 0 && p.rating <= 5 ? p.rating : null,
       ratingCount: Number.isInteger(p.ratingCount) && p.ratingCount >= 0 ? p.ratingCount : null,
-      mapsUrl: typeof p.mapsUrl === "string" && /^https:\/\/((www|maps)\.)?google\.[^/]+\/maps\//i.test(p.mapsUrl) ? p.mapsUrl.slice(0, 500) : "",
+      mapsUrl: placeMapsUrl(p),
       demo: false,
     };
   });
