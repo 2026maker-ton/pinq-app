@@ -1,0 +1,12 @@
+{
+  "center": {"lat": 37.5345, "lng": 126.9895},
+  "radius_m": 1000,
+  "budget_per_person": 70000,
+  "party_size": 2,
+  "transport_mode": "walk",
+  "start_time": "14:00",
+  "duration_hours": 4,
+  "vibe_tags": ["quiet", "local food", "aesthetic cafe"],
+  "language": "ko",
+  "mode": "plan"
+}
