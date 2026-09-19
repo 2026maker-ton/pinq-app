@@ -1,23 +1,30 @@
 import React, { useEffect, useRef, useState } from "react";
 import { loadGoogleMaps } from "./maps.js";
+import { YONGSAN_BOUNDS, YONGSAN_FEATURES } from "./region.mjs";
 
 export default function MapView({
   demo,
+  dark,
   origin,
   radius,
   stops,
+  places,
   focused,
+  bottomPadding,
   onOrigin,
   onFocus,
+  onPlace,
 }) {
   const host = useRef(null),
     instance = useRef(null),
     onOriginRef = useRef(onOrigin),
-    onFocusRef = useRef(onFocus);
+    onFocusRef = useRef(onFocus),
+    onPlaceRef = useRef(onPlace);
   const [ready, setReady] = useState(0),
     [error, setError] = useState("");
   onOriginRef.current = onOrigin;
   onFocusRef.current = onFocus;
+  onPlaceRef.current = onPlace;
   const originRef = useRef(origin);
   originRef.current = origin;
   useEffect(() => {
@@ -35,6 +42,9 @@ export default function MapView({
           zoom: 15,
           mapTypeControl: false,
           streetViewControl: false,
+          fullscreenControl: false,
+          zoomControl: false,
+          restriction: { latLngBounds: YONGSAN_BOUNDS, strictBounds: false },
         });
         instance.current = map;
         listener = map.addListener("click", (e) => {
@@ -54,6 +64,30 @@ export default function MapView({
     };
   }, [demo]);
   useEffect(() => {
+    if (demo || !instance.current || !window.google?.maps?.Polygon) return;
+    const maps = window.google.maps;
+    const outlines = YONGSAN_FEATURES.flatMap((feature) => feature.geometry.coordinates.map((polygon) => new maps.Polygon({
+      map: instance.current,
+      paths: polygon.map((ring) => ring.map(([lng, lat]) => ({ lat, lng }))),
+      strokeColor: "#4285f4", strokeOpacity: 0.48, strokeWeight: 1,
+      fillColor: "#4285f4", fillOpacity: 0.025, clickable: false,
+    })));
+    return () => outlines.forEach((outline) => outline.setMap(null));
+  }, [demo, ready]);
+  useEffect(() => {
+    if (demo || !instance.current) return;
+    instance.current.setOptions({
+      styles: dark ? [
+        { elementType: "geometry", stylers: [{ color: "#1d2a40" }] },
+        { elementType: "labels.text.fill", stylers: [{ color: "#a5b7d0" }] },
+        { elementType: "labels.text.stroke", stylers: [{ color: "#1d2a40" }] },
+        { featureType: "road", elementType: "geometry", stylers: [{ color: "#344762" }] },
+        { featureType: "water", elementType: "geometry", stylers: [{ color: "#122b4b" }] },
+        { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#234538" }] },
+      ] : [],
+    });
+  }, [demo, dark, ready]);
+  useEffect(() => {
     if (demo || !instance.current || !window.google?.maps?.Marker) return;
     const map = instance.current,
       maps = window.google.maps;
@@ -66,13 +100,12 @@ export default function MapView({
       map,
       center: origin,
       radius,
-      fillColor: "#297658",
+      fillColor: "#4285f4",
       fillOpacity: 0.08,
-      strokeColor: "#297658",
+      strokeColor: "#4285f4",
       strokeWeight: 1,
       clickable: false,
     });
-    map.panTo(origin);
     return () => {
       pin.setMap(null);
       circle.setMap(null);
@@ -91,7 +124,7 @@ export default function MapView({
         icon: {
           path: maps.SymbolPath.CIRCLE,
           scale: focused === p.id ? 19 : 16,
-          fillColor: focused === p.id ? "#c8873d" : "#286247",
+          fillColor: focused === p.id ? "#f4a34e" : "#4285f4",
           fillOpacity: 1,
           strokeColor: "white",
           strokeWeight: 3,
@@ -106,13 +139,11 @@ export default function MapView({
       path: stops.length
         ? [origin, ...stops.map((p) => ({ lat: p.lat, lng: p.lng }))]
         : [],
-      strokeColor: "#296f56",
+      strokeColor: "#4285f4",
       strokeOpacity: 0.6,
       strokeWeight: 3,
       clickable: false,
     });
-    const selected = stops.find((p) => p.id === focused);
-    if (selected) map.panTo({ lat: selected.lat, lng: selected.lng });
     return () => {
       markers.forEach((m) => {
         maps.event.clearInstanceListeners(m);
@@ -121,6 +152,37 @@ export default function MapView({
       line.setMap(null);
     };
   }, [demo, stops, focused, origin, ready]);
+  useEffect(() => {
+    if (demo || !instance.current || !window.google?.maps?.Marker) return;
+    const maps = window.google.maps;
+    const routeIds = new Set(stops.map((p) => p.id));
+    const pins = places.filter((p) => !routeIds.has(p.id)).map((p) => {
+      const pin = new maps.Marker({
+        map: instance.current, position: { lat: p.lat, lng: p.lng }, title: p.name,
+        icon: { path: maps.SymbolPath.CIRCLE, scale: focused === p.id ? 9 : 5,
+          fillColor: focused === p.id ? "#f4a34e" : "#87aef2", fillOpacity: .9,
+          strokeColor: "#ffffff", strokeWeight: 1.5 },
+      });
+      pin.addListener("click", () => onPlaceRef.current(p.id));
+      return pin;
+    });
+    return () => pins.forEach((pin) => { maps.event.clearInstanceListeners(pin); pin.setMap(null); });
+  }, [demo, places, stops, focused, ready]);
+  useEffect(() => {
+    if (demo || !instance.current || !window.google?.maps?.LatLngBounds) return;
+    const maps = window.google.maps;
+    const bounds = new maps.LatLngBounds();
+    const selected = stops.find((p) => p.id === focused) ?? places.find((p) => p.id === focused);
+    if (selected) bounds.extend({ lat: selected.lat, lng: selected.lng });
+    else {
+      bounds.extend(origin);
+      (stops.length ? stops : places).forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+    }
+    const height = host.current?.clientHeight ?? window.innerHeight;
+    const bottom = Math.min(bottomPadding + 20, height - 150);
+    instance.current.fitBounds(bounds, { top: 190, bottom, left: 40, right: 40 });
+    if (!stops.length || selected) instance.current.setZoom(15);
+  }, [demo, stops, places, origin, focused, bottomPadding, ready]);
   if (!demo)
     return (
       <div className="map-wrap">
@@ -137,11 +199,12 @@ export default function MapView({
         </span>
       </div>
     );
+  const centerY = Math.max(23, Math.min(50, ((window.innerHeight - bottomPadding + 170) / 2 / window.innerHeight) * 100));
   const xy = (p) => ({
     x: 50 + (p.lng - origin.lng) * 6000,
-    y: 50 - (p.lat - origin.lat) * 7000,
+    y: centerY - (p.lat - origin.lat) * 7000,
   });
-  const paths = [{ x: 50, y: 50 }, ...stops.map(xy)];
+  const paths = [{ x: 50, y: centerY }, ...stops.map(xy)];
   return (
     <div
       className="demo-map"
@@ -149,7 +212,7 @@ export default function MapView({
         const r = e.currentTarget.getBoundingClientRect();
         onOrigin({
           lat:
-            origin.lat - ((100 * (e.clientY - r.top)) / r.height - 50) / 7000,
+            origin.lat - ((100 * (e.clientY - r.top)) / r.height - centerY) / 7000,
           lng:
             origin.lng + ((100 * (e.clientX - r.left)) / r.width - 50) / 6000,
         });
@@ -168,11 +231,11 @@ export default function MapView({
       >
         <ellipse
           cx="50"
-          cy="50"
+          cy={centerY}
           rx={Math.min(43, radius / 30)}
           ry={Math.min(43, radius / 30)}
-          fill="#28755212"
-          stroke="#287552"
+          fill="#4285f412"
+          stroke="#4285f4"
           strokeDasharray="1 1"
           strokeWidth=".25"
         />
@@ -180,7 +243,7 @@ export default function MapView({
           <polyline
             points={paths.map((p) => `${p.x},${p.y}`).join(" ")}
             fill="none"
-            stroke="#257154"
+            stroke="#4285f4"
             strokeWidth=".6"
             strokeDasharray="1 1"
           />
@@ -188,7 +251,7 @@ export default function MapView({
       </svg>
       <button
         className="origin-pin"
-        style={{ left: "50%", top: "50%" }}
+        style={{ left: "50%", top: `${centerY}%` }}
         onClick={(e) => e.stopPropagation()}
         title="출발점"
       >
@@ -210,6 +273,11 @@ export default function MapView({
             {i + 1}
           </button>
         );
+      })}
+      {places.filter((p) => !stops.some((stop) => stop.id === p.id)).map((p) => {
+        const pos = xy(p);
+        return <button key={p.id} className={"browse-pin" + (focused === p.id ? " selected" : "")}
+          style={{ left: `${pos.x}%`, top: `${pos.y}%` }} onClick={(e) => { e.stopPropagation(); onPlace(p.id); }} title={p.name} aria-label={`${p.name} 정보 보기`} />;
       })}
       <span className="map-caption">
         예시 지도 · 실제 지리와 무관 · 클릭해서 출발점 이동

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PinQ</string>
+    <string name="title_activity_main">PinQ</string>
+    <string name="package_name">com.pinq.app</string>
+    <string name="custom_url_scheme">com.pinq.app</string>
+</resources>

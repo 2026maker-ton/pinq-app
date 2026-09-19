@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ORIGIN, DEMO, validate, createCourses } from "../src/engine.mjs";
 import { recommend } from "../server/index.mjs";
+import { coverageCenters, isInYongsan } from "../src/region.mjs";
+import { searchPlaces } from "../src/maps.js";
 const c = {
   origin: ORIGIN,
   people: 2,
@@ -111,5 +113,42 @@ test("malformed model output falls back to deterministic courses", async () => {
       if (backup[k] === undefined) delete process.env[k];
       else process.env[k] = backup[k];
     }
+  }
+});
+test("Yongsan scope rejects outside origins and places", async () => {
+  const outside = { lat: 37.5445, lng: 127.0438 };
+  assert.ok(isInYongsan(ORIGIN));
+  assert.equal(isInYongsan(outside), false);
+  assert.throws(() => validate({ ...c, origin: outside }), /용산구/);
+  const courses = createCourses([...DEMO, { ...DEMO[0], id: "outside", ...outside }], c);
+  assert.ok(courses.every((route) => route.stops.every((place) => place.id !== "outside")));
+  await assert.rejects(() => recommend({ conditions: c, places: [{ ...DEMO[0], ...outside }] }), /용산구/);
+});
+test("district-wide search centers remain in Yongsan and inside the selected radius", () => {
+  const centers = coverageCenters(ORIGIN, 8000);
+  assert.ok(centers.length > 1 && centers.length <= 5);
+  assert.ok(centers.every(isInYongsan));
+});
+test("multi-center Places search deduplicates and excludes non-Yongsan results", async () => {
+  const previousWindow = globalThis.window;
+  const requests = [];
+  try {
+    globalThis.window = { google: { maps: { importLibrary: async () => ({
+      Place: { searchNearby: async (request) => {
+        requests.push(request);
+        return { places: [
+          { id: "inside", displayName: "용산 장소", location: { lat: () => ORIGIN.lat, lng: () => ORIGIN.lng }, types: ["cafe"] },
+          { id: "outside", displayName: "구 밖 장소", location: { lat: () => 37.5445, lng: () => 127.0438 }, types: ["cafe"] },
+        ] };
+      } },
+      SearchNearbyRankPreference: { POPULARITY: "POPULARITY" },
+    }) } } };
+    const result = await searchPlaces({ ...c, radius: 8000 });
+    assert.deepEqual(result.map((place) => place.id), ["inside"]);
+    assert.ok(requests.length > 1 && requests.length <= 15);
+    assert.ok(requests.every((request) => request.maxResultCount === 20));
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
   }
 });

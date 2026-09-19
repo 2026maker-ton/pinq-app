@@ -1,9 +1,10 @@
 import http from "node:http";
 import { createCourses, validate, demoPlaces } from "../src/engine.mjs";
+import { isInYongsan } from "../src/region.mjs";
 const PORT = 3001;
 function normalizePlaces(input) {
-  if (!Array.isArray(input) || input.length > 20)
-    throw Error("장소 목록은 최대 20개입니다.");
+  if (!Array.isArray(input) || input.length > 48)
+    throw Error("장소 목록은 최대 48개입니다.");
   const seen = new Set();
   return input.map((p) => {
     if (
@@ -22,6 +23,7 @@ function normalizePlaces(input) {
       Math.abs(p.lng) > 180
     )
       throw Error("장소 좌표가 잘못됐어요.");
+    if (!isInYongsan(p)) throw Error("용산구 밖 장소는 추천할 수 없어요.");
     const type = ["nature", "culture", "cafe", "food"].includes(p.type)
       ? p.type
       : "culture";
@@ -44,6 +46,9 @@ function normalizePlaces(input) {
       keywords: clean(p.keywords),
       address: clean(p.address),
       hours: clean(p.hours),
+      rating: Number.isFinite(p.rating) && p.rating >= 0 && p.rating <= 5 ? p.rating : null,
+      ratingCount: Number.isInteger(p.ratingCount) && p.ratingCount >= 0 ? p.ratingCount : null,
+      mapsUrl: typeof p.mapsUrl === "string" && /^https:\/\/((www|maps)\.)?google\.[^/]+\/maps\//i.test(p.mapsUrl) ? p.mapsUrl.slice(0, 500) : "",
       demo: false,
     };
   });

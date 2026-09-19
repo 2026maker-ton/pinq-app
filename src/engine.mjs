@@ -1,4 +1,6 @@
-export const ORIGIN = { lat: 37.5445, lng: 127.0438 };
+import { isInYongsan, YONGSAN_CENTER } from "./region.mjs";
+
+export const ORIGIN = YONGSAN_CENTER;
 const rows = [
   [
     "골목 로스터리",
@@ -204,12 +206,14 @@ export function validate(c) {
     Math.abs(c.origin.lng) > 180
   )
     throw Error("출발 좌표를 다시 선택해주세요.");
+  if (!isInYongsan(c.origin))
+    throw Error("출발점은 서울시 용산구 안에서 선택해주세요.");
   if (!Number.isInteger(c.people) || c.people < 1 || c.people > 30)
     throw Error("인원은 1~30명 사이의 정수로 입력해주세요.");
   if (!Number.isFinite(c.budget) || c.budget < 0 || c.budget > 10000000)
     throw Error("전체 예산은 0~10,000,000원으로 입력해주세요.");
-  if (!Number.isFinite(c.radius) || c.radius < 300 || c.radius > 3000)
-    throw Error("반경은 300m~3km로 선택해주세요.");
+  if (!Number.isFinite(c.radius) || c.radius < 300 || c.radius > 8000)
+    throw Error("반경은 300m~8km로 선택해주세요.");
   if (
     !["all", "cafe", "culture", "nature"].includes(c.theme) ||
     !["walk", "bike", "transit"].includes(c.transport)
@@ -251,6 +255,7 @@ export function createCourses(raw, c, strategy = "balanced") {
       p.price >= 0 &&
       Number.isFinite(p.stay) &&
       p.stay > 0 &&
+      isInYongsan(p) &&
       (!c.verifiedOnly || p.demo) &&
       distance(c.origin, p) <= c.radius &&
       (p.capacity == null || p.capacity >= c.people),
@@ -382,7 +387,7 @@ export function demoPlaces(origin) {
     ...p,
     lat: origin.lat + p.lat - ORIGIN.lat,
     lng: origin.lng + p.lng - ORIGIN.lng,
-  }));
+  })).filter(isInYongsan);
 }
 export function clock(n) {
   return (
