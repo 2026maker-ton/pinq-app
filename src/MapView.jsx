@@ -1,12 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { loadGoogleMaps } from "./maps.js";
 import { YONGSAN_BOUNDS, YONGSAN_FEATURES } from "./region.mjs";
+import { coursesFocus } from "./engine.mjs";
 
 export default function MapView({
   demo,
   dark,
   origin,
   radius,
+  courses = [],
+  selected = 0,
+  routeColors = ["#2563eb", "#e11d48", "#059669"],
   stops,
   places,
   focused,
@@ -20,6 +24,8 @@ export default function MapView({
     onOriginRef = useRef(onOrigin),
     onFocusRef = useRef(onFocus),
     onPlaceRef = useRef(onPlace);
+  const pannedRoute = useRef("");
+  const focusedPan = useRef("");
   const [ready, setReady] = useState(0),
     [error, setError] = useState("");
   onOriginRef.current = onOrigin;
@@ -115,16 +121,18 @@ export default function MapView({
     if (demo || !instance.current || !window.google?.maps?.Marker) return;
     const map = instance.current,
       maps = window.google.maps;
+    const selectedColor = routeColors[selected] || routeColors[0];
     const markers = stops.map((p, i) => {
       const marker = new maps.Marker({
         map,
         position: { lat: p.lat, lng: p.lng },
         title: p.name,
         label: { text: String(i + 1), color: "white", fontWeight: "700" },
+        zIndex: 4,
         icon: {
           path: maps.SymbolPath.CIRCLE,
           scale: focused === p.id ? 19 : 16,
-          fillColor: focused === p.id ? "#f4a34e" : "#4285f4",
+          fillColor: focused === p.id ? "#f4a34e" : selectedColor,
           fillOpacity: 1,
           strokeColor: "white",
           strokeWeight: 3,
@@ -133,25 +141,28 @@ export default function MapView({
       marker.addListener("click", () => onFocusRef.current(p.id));
       return marker;
     });
-    // Straight connections only, not navigable roads or turn-by-turn routes.
-    const line = new maps.Polyline({
-      map,
-      path: stops.length
-        ? [origin, ...stops.map((p) => ({ lat: p.lat, lng: p.lng }))]
-        : [],
-      strokeColor: "#4285f4",
-      strokeOpacity: 0.6,
-      strokeWeight: 3,
-      clickable: false,
-    });
+    const lines = (courses.length ? courses.map((course, i) => ({ course, i })) : stops.length ? [{ course: { stops }, i: selected }] : [])
+      .sort((a, b) => Number(a.i === selected) - Number(b.i === selected))
+      .map(({ course, i }) => {
+        const active = i === selected;
+        return new maps.Polyline({
+          map,
+          path: [origin, ...(course.stops ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))],
+          strokeColor: routeColors[i] || selectedColor,
+          strokeOpacity: active ? 1 : 0.32,
+          strokeWeight: active ? 7 : 3,
+          zIndex: active ? 3 : 1,
+          clickable: false,
+        });
+      });
     return () => {
       markers.forEach((m) => {
         maps.event.clearInstanceListeners(m);
         m.setMap(null);
       });
-      line.setMap(null);
+      lines.forEach((line) => line.setMap(null));
     };
-  }, [demo, stops, focused, origin, ready]);
+  }, [demo, courses, selected, routeColors, stops, focused, origin, ready]);
   useEffect(() => {
     if (demo || !instance.current || !window.google?.maps?.Marker) return;
     const maps = window.google.maps;
@@ -169,20 +180,23 @@ export default function MapView({
     return () => pins.forEach((pin) => { maps.event.clearInstanceListeners(pin); pin.setMap(null); });
   }, [demo, places, stops, focused, ready]);
   useEffect(() => {
-    if (demo || !instance.current || !window.google?.maps?.LatLngBounds) return;
-    const maps = window.google.maps;
-    const bounds = new maps.LatLngBounds();
-    const selected = stops.find((p) => p.id === focused) ?? places.find((p) => p.id === focused);
-    if (selected) bounds.extend({ lat: selected.lat, lng: selected.lng });
-    else {
-      bounds.extend(origin);
-      (stops.length ? stops : places).forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+    if (demo || !instance.current || !courses[0]) return;
+    const key = courses[0].id;
+    if (pannedRoute.current === key) return;
+    pannedRoute.current = key;
+    instance.current.panTo(coursesFocus(origin, [courses[0]]));
+  }, [demo, courses, origin, ready]);
+  useEffect(() => {
+    if (demo || !instance.current) return;
+    if (!focused) {
+      focusedPan.current = "";
+      return;
     }
-    const height = host.current?.clientHeight ?? window.innerHeight;
-    const bottom = Math.min(bottomPadding + 20, height - 150);
-    instance.current.fitBounds(bounds, { top: 190, bottom, left: 40, right: 40 });
-    if (!stops.length || selected) instance.current.setZoom(15);
-  }, [demo, stops, places, origin, focused, bottomPadding, ready]);
+    const place = stops.find((p) => p.id === focused) ?? places.find((p) => p.id === focused);
+    if (!place || focusedPan.current === place.id) return;
+    focusedPan.current = place.id;
+    instance.current.panTo({ lat: place.lat, lng: place.lng });
+  }, [demo, focused, stops, places, ready]);
   if (!demo)
     return (
       <div className="map-wrap">
@@ -200,11 +214,14 @@ export default function MapView({
       </div>
     );
   const centerY = Math.max(23, Math.min(50, ((window.innerHeight - bottomPadding + 170) / 2 / window.innerHeight) * 100));
+  const focus = courses[0] ? coursesFocus(origin, [courses[0]]) : origin;
   const xy = (p) => ({
-    x: 50 + (p.lng - origin.lng) * 6000,
-    y: centerY - (p.lat - origin.lat) * 7000,
+    x: 50 + (p.lng - focus.lng) * 6000,
+    y: centerY - (p.lat - focus.lat) * 7000,
   });
-  const paths = [{ x: 50, y: centerY }, ...stops.map(xy)];
+  const originPos = xy(origin);
+  const selectedColor = routeColors[selected] || routeColors[0];
+  const demoRoutes = courses.length ? courses : stops.length ? [{ stops }] : [];
   return (
     <div
       className="demo-map"
@@ -212,9 +229,9 @@ export default function MapView({
         const r = e.currentTarget.getBoundingClientRect();
         onOrigin({
           lat:
-            origin.lat - ((100 * (e.clientY - r.top)) / r.height - centerY) / 7000,
+            focus.lat - ((100 * (e.clientY - r.top)) / r.height - centerY) / 7000,
           lng:
-            origin.lng + ((100 * (e.clientX - r.left)) / r.width - 50) / 6000,
+            focus.lng + ((100 * (e.clientX - r.left)) / r.width - 50) / 6000,
         });
       }}
     >
@@ -230,8 +247,8 @@ export default function MapView({
         aria-hidden="true"
       >
         <ellipse
-          cx="50"
-          cy={centerY}
+          cx={originPos.x}
+          cy={originPos.y}
           rx={Math.min(43, radius / 30)}
           ry={Math.min(43, radius / 30)}
           fill="#4285f412"
@@ -239,19 +256,15 @@ export default function MapView({
           strokeDasharray="1 1"
           strokeWidth=".25"
         />
-        {stops.length > 0 && (
-          <polyline
-            points={paths.map((p) => `${p.x},${p.y}`).join(" ")}
-            fill="none"
-            stroke="#4285f4"
-            strokeWidth=".6"
-            strokeDasharray="1 1"
-          />
-        )}
+        {demoRoutes.map((course, i) => {
+          const active = i === selected || demoRoutes.length === 1;
+          const points = [originPos, ...course.stops.map(xy)].map((p) => `${p.x},${p.y}`).join(" ");
+          return <polyline key={course.id || i} points={points} fill="none" stroke={routeColors[i] || selectedColor} strokeWidth={active ? 1.4 : 0.55} strokeOpacity={active ? 1 : 0.35} strokeLinecap="round" strokeLinejoin="round" />;
+        })}
       </svg>
       <button
         className="origin-pin"
-        style={{ left: "50%", top: `${centerY}%` }}
+        style={{ left: `${originPos.x}%`, top: `${originPos.y}%` }}
         onClick={(e) => e.stopPropagation()}
         title="출발점"
       >
@@ -263,7 +276,7 @@ export default function MapView({
           <button
             key={p.id}
             className={"demo-pin" + (focused === p.id ? " selected" : "")}
-            style={{ left: `${pos.x}%`, top: `${pos.y}%` }}
+            style={{ left: `${pos.x}%`, top: `${pos.y}%`, background: focused === p.id ? undefined : selectedColor }}
             onClick={(e) => {
               e.stopPropagation();
               onFocus(p.id);

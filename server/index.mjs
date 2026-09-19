@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createCourses, validate, demoPlaces } from "../src/engine.mjs";
+import { createCourses, validate, demoPlaces, typicalStay } from "../src/engine.mjs";
 import { isInYongsan } from "../src/region.mjs";
 const PORT = 3001;
 function normalizePlaces(input) {
@@ -32,20 +32,36 @@ function normalizePlaces(input) {
         ? s.replace(/https?:\/\/\S+|<[^>]*>/g, "").slice(0, 400)
         : "";
     // Do not trust price/capacity/local/quiet/open flags sent by the client.
+    const periods = Array.isArray(p.periods)
+      ? p.periods.slice(0, 14).map((period) => ({
+          open: period?.open && Number.isInteger(period.open.day)
+            ? { day: period.open.day, hour: Number(period.open.hour) || 0, minute: Number(period.open.minute) || 0 }
+            : null,
+          close: period?.close && Number.isInteger(period.close.day)
+            ? { day: period.close.day, hour: Number(period.close.hour) || 0, minute: Number(period.close.minute) || 0 }
+            : null,
+        })).filter((period) => period.open)
+      : [];
+    const types = Array.isArray(p.types)
+      ? p.types.filter((t) => typeof t === "string" && t.length > 0 && t.length < 40).slice(0, 8)
+      : [];
     return {
       id: p.id,
       name: clean(p.name),
       lat: p.lat,
       lng: p.lng,
       type,
+      types,
       price: { nature: 0, culture: 10000, cafe: 8000, food: 15000 }[type],
-      stay: 40,
+      stay: typicalStay({ type, types, demo: false }),
       capacity: null,
       local: null,
       quiet: null,
       keywords: clean(p.keywords),
       address: clean(p.address),
       hours: clean(p.hours),
+      openNow: p.openNow === true ? true : p.openNow === false ? false : null,
+      periods,
       rating: Number.isFinite(p.rating) && p.rating >= 0 && p.rating <= 5 ? p.rating : null,
       ratingCount: Number.isInteger(p.ratingCount) && p.ratingCount >= 0 ? p.ratingCount : null,
       mapsUrl: typeof p.mapsUrl === "string" && /^https:\/\/((www|maps)\.)?google\.[^/]+\/maps\//i.test(p.mapsUrl) ? p.mapsUrl.slice(0, 500) : "",
@@ -55,10 +71,9 @@ function normalizePlaces(input) {
 }
 export async function recommend(body) {
   const c = validate(body.conditions);
-  const strategy = body.strategy ?? "balanced";
   const places =
     body.demo === true ? demoPlaces(c.origin) : normalizePlaces(body.places);
-  const courses = createCourses(places, c, strategy);
+  const courses = createCourses(places, c);
   let engine = "rules",
     notice = "규칙 기반 추천";
   const { LLM_API_URL: url, LLM_API_KEY: key, LLM_MODEL: model } = process.env;
@@ -85,7 +100,7 @@ export async function recommend(body) {
             {
               role: "user",
               content: JSON.stringify({
-                preferences: { theme: c.theme, keyword: c.keyword, strategy },
+                preferences: { styles: c.styles, keyword: c.keyword, timeMode: c.timeMode, time: c.time, endTime: c.endTime, playHours: c.playHours },
                 candidates: courses.map((r) => ({
                   id: r.id,
                   total: r.total,

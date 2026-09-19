@@ -1,4 +1,5 @@
 import { coverageCenters, isInYongsan } from "./region.mjs";
+import { styleSearchGroups, typicalStay } from "./engine.mjs";
 
 let loading;
 export function loadGoogleMaps() {
@@ -33,32 +34,54 @@ export function loadGoogleMaps() {
 
 const GROUPS = {
   food: ["cafe", "bakery", "restaurant"],
-  culture: ["museum", "art_gallery", "library", "book_store", "tourist_attraction"],
-  nature: ["park"],
+  culture: ["book_store", "art_gallery", "library", "museum", "tourist_attraction"],
+  nature: ["playground", "park"],
 };
-const THEME_GROUPS = { all: ["food", "culture", "nature"], cafe: ["food"], culture: ["culture"], nature: ["nature"] };
-const FIELDS = ["id", "displayName", "location", "formattedAddress", "types", "businessStatus", "regularOpeningHours", "rating", "userRatingCount", "googleMapsURI"];
+const DETAIL_TYPES = ["cafe", "bakery", "restaurant", "book_store", "art_gallery"];
+const COARSE_TYPES = new Set(["park", "tourist_attraction", "shopping_mall", "university", "stadium"]);
+const FIELDS = ["id", "displayName", "location", "formattedAddress", "types", "businessStatus", "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "googleMapsURI"];
+
+function mapPeriods(hours) {
+  return (hours?.periods ?? []).map((period) => ({
+    open: period.open
+      ? { day: period.open.day, hour: period.open.hour, minute: period.open.minute || 0 }
+      : null,
+    close: period.close
+      ? { day: period.close.day, hour: period.close.hour, minute: period.close.minute || 0 }
+      : null,
+  })).filter((period) => period.open);
+}
+
+function isCoarse(place) {
+  return (place.types || []).some((t) => COARSE_TYPES.has(t));
+}
 
 function mapPlace(p) {
-  const types = p.types ?? [];
-  const type = types.includes("park") ? "nature" :
+  const types = (p.types ?? []).filter((t) => typeof t === "string").slice(0, 8);
+  const type = types.includes("park") || types.includes("playground") ? "nature" :
     types.some((t) => ["museum", "art_gallery", "library", "book_store", "tourist_attraction"].includes(t)) ? "culture" :
     types.some((t) => ["cafe", "bakery"].includes(t)) ? "cafe" : "food";
-  return {
+  const current = p.currentOpeningHours;
+  const regular = p.regularOpeningHours;
+  const mapped = {
     id: p.id,
     name: p.displayName ?? "이름 없는 장소",
-    lat: p.location.lat(), lng: p.location.lng(), type,
+    lat: p.location.lat(), lng: p.location.lng(), type, types,
     // These are category estimates, never a Google menu or admission price.
     price: { nature: 0, culture: 10000, cafe: 8000, food: 15000 }[type],
-    stay: 40, capacity: null, local: null, quiet: null,
+    capacity: null, local: null, quiet: null,
     keywords: { nature: "자연 공원 산책 휴식", culture: "문화 전시 책 관광", cafe: "커피 디저트 카페", food: "식사 먹거리" }[type],
     address: p.formattedAddress ?? "",
-    hours: p.regularOpeningHours?.weekdayDescriptions?.join(" / ") ?? "",
+    hours: regular?.weekdayDescriptions?.join(" / ") ?? "",
+    openNow: current?.openNow === true ? true : current?.openNow === false ? false : null,
+    periods: mapPeriods(regular),
     rating: Number.isFinite(p.rating) ? p.rating : null,
     ratingCount: Number.isInteger(p.userRatingCount) ? p.userRatingCount : null,
     mapsUrl: p.googleMapsURI ?? "",
     demo: false,
   };
+  mapped.stay = typicalStay(mapped);
+  return mapped;
 }
 
 function evenlySpread(places, count, origin) {
@@ -78,11 +101,49 @@ function evenlySpread(places, count, origin) {
   return chosen;
 }
 
+function pickPlaces(list, count, origin) {
+  const fine = list.filter((p) => !isCoarse(p));
+  const coarse = list.filter(isCoarse);
+  const picked = evenlySpread(fine, count, origin);
+  if (picked.length < count)
+    picked.push(...evenlySpread(coarse, count - picked.length, origin));
+  return picked;
+}
+
+async function refineCoarse(Place, rank, selected, unique) {
+  const coarse = selected.filter(isCoarse).slice(0, 3);
+  if (!coarse.length) return selected;
+  const replacements = [];
+  for (const parent of coarse) {
+    try {
+      const result = await Place.searchNearby({
+        fields: FIELDS,
+        locationRestriction: { center: { lat: parent.lat, lng: parent.lng }, radius: 180 },
+        includedTypes: DETAIL_TYPES,
+        maxResultCount: 10,
+        rankPreference: rank,
+      });
+      const children = (result.places ?? [])
+        .filter((p) => p?.id && p.location && !["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"].includes(p.businessStatus))
+        .map(mapPlace)
+        .filter((child) => isInYongsan(child) && !isCoarse(child) && !unique.has(child.id));
+      if (children.length) replacements.push({ parent, children });
+    } catch {
+      // Keep the coarse place when the detail search fails.
+    }
+  }
+  if (!replacements.length) return selected;
+  const drop = new Set(replacements.map((item) => item.parent.id));
+  const extra = replacements.flatMap((item) => item.children);
+  for (const child of extra) unique.set(child.id, child);
+  return [...selected.filter((p) => !drop.has(p.id)), ...extra].slice(0, 48);
+}
+
 export async function searchPlaces(c) {
   const maps = await loadGoogleMaps();
   const { Place, SearchNearbyRankPreference } = await maps.importLibrary("places");
   const centers = coverageCenters(c.origin, c.radius);
-  const groups = THEME_GROUPS[c.theme];
+  const groups = styleSearchGroups(c.styles);
   const jobs = centers.flatMap((center) => groups.map((group) => ({ center, group })));
   const collected = [];
   let successes = 0;
@@ -120,6 +181,6 @@ export async function searchPlaces(c) {
     if (meters(c.origin, candidate) <= c.radius) byType[candidate.type].push(candidate);
   const desired = groups.length === 1 ? { nature: 48, culture: 48, cafe: 48, food: 48 } :
     { nature: 12, culture: 16, cafe: 10, food: 10 };
-  const selected = Object.entries(byType).flatMap(([type, list]) => evenlySpread(list, desired[type], c.origin));
-  return selected.slice(0, 48);
+  const selected = Object.entries(byType).flatMap(([type, list]) => pickPlaces(list, desired[type], c.origin));
+  return refineCoarse(Place, SearchNearbyRankPreference.POPULARITY, selected.slice(0, 48), unique);
 }
