@@ -60,3 +60,7 @@
 .ghost-button{border:1px solid var(--line);border-radius:14px;background:var(--panel-solid);color:var(--ink);font-weight:800;padding:8px 12px}
 .ghost-button.compact{flex:0 0 auto;height:auto;border-radius:999px;font-size:11px}
 .sheet-heading .ghost-button{white-space:nowrap}
+.slide-field input[type=range]{display:block;width:100%;margin-top:10px;accent-color:var(--blue)}
+.slide-input{display:flex;align-items:center;gap:6px;margin-top:8px}
+.slide-input input[type=number]{flex:1;height:43px;padding:0 10px;border:1px solid var(--line);border-radius:11px;background:var(--panel-solid);color:var(--ink)}
+.slide-input em{font-style:normal;font-size:11px;font-weight:800;color:var(--muted);white-space:nowrap}

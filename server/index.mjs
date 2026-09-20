@@ -143,14 +143,35 @@ export async function recommend(body) {
   }
   return { courses, engine, notice };
 }
-const server = http.createServer(async (req, res) => {
+const ALLOWED_ORIGINS = new Set([
+  "https://localhost",
+  "http://localhost",
+  "capacitor://localhost",
+]);
+function corsHeaders(origin) {
+  const headers = { "Cache-Control": "no-store" };
+  if (ALLOWED_ORIGINS.has(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    headers["Access-Control-Allow-Headers"] = "Content-Type";
+    headers.Vary = "Origin";
+  }
+  return headers;
+}
+export const server = http.createServer(async (req, res) => {
+  const extra = corsHeaders(req.headers.origin);
   const send = (status, data) => {
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
+      ...extra,
     });
     res.end(JSON.stringify(data));
   };
+  if (req.method === "OPTIONS" && req.url === "/api/recommend") {
+    res.writeHead(204, extra);
+    res.end();
+    return;
+  }
   if (req.method !== "POST" || req.url !== "/api/recommend")
     return send(404, { error: "Not found" });
   // This local demo has no authentication; do not expose the development server publicly.
@@ -174,10 +195,11 @@ const server = http.createServer(async (req, res) => {
     });
   }
 });
+const BIND = process.env.RECOMMEND_BIND === "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
 if (
   process.argv[1]?.endsWith("/index.mjs") ||
   process.argv[1]?.endsWith("\\index.mjs")
 )
-  server.listen(PORT, "127.0.0.1", () =>
-    console.log(`추천 서버: http://127.0.0.1:${PORT}`),
+  server.listen(PORT, BIND, () =>
+    console.log(`추천 서버: http://${BIND}:${PORT}`),
   );

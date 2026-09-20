@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ORIGIN, DEMO, validate, createCourses, toAgentConditions, coursesFocus, timeWindow, typicalStay, uniqueCourses, placeMapsUrl, unitPrice, partyCost, estimateCourseCost, TRANSIT_FARE } from "../src/engine.mjs";
-import { recommend } from "../server/index.mjs";
+import { recommend, server } from "../server/index.mjs";
 import { coverageCenters, isInYongsan } from "../src/region.mjs";
 import { searchPlaces } from "../src/maps.js";
 const c = {
@@ -435,4 +435,33 @@ test("mustInclude three places is covered by two or three courses", () => {
   assert.ok(courses.length >= 2 && courses.length <= 3);
   const covered = new Set(courses.flatMap((route) => route.stops.map((stop) => stop.id)));
   for (const id of ids) assert.ok(covered.has(id));
+});
+test("recommend CORS allows Capacitor origins", async () => {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const options = await fetch(`http://127.0.0.1:${port}/api/recommend`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://localhost", "Access-Control-Request-Method": "POST" },
+    });
+    assert.equal(options.status, 204);
+    assert.equal(options.headers.get("access-control-allow-origin"), "https://localhost");
+    const blocked = await fetch(`http://127.0.0.1:${port}/api/recommend`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" },
+    });
+    assert.equal(blocked.status, 204);
+    assert.equal(blocked.headers.get("access-control-allow-origin"), null);
+    const posted = await fetch(`http://127.0.0.1:${port}/api/recommend`, {
+      method: "POST",
+      headers: { Origin: "https://localhost", "Content-Type": "application/json" },
+      body: JSON.stringify({ conditions: c, demo: true }),
+    });
+    assert.equal(posted.status, 200);
+    assert.equal(posted.headers.get("access-control-allow-origin"), "https://localhost");
+    const body = await posted.json();
+    assert.ok(Array.isArray(body.courses));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

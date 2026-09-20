@@ -1,5 +1,8 @@
 {
   "appId": "com.pinq.app",
   "appName": "PinQ",
-  "webDir": "build"
+  "webDir": "build",
+  "android": {
+    "allowMixedContent": true
+  }
 }

@@ -11,7 +11,9 @@
     "build": "react-scripts build",
     "test": "node --test tests/*.test.mjs",
     "android:sync": "npm run build && cap sync android",
-    "android:open": "cap open android"
+    "android:open": "cap open android",
+    "android:apk": "node --env-file-if-exists=.env scripts/android-apk.mjs",
+    "android:apk:lan": "node --env-file-if-exists=.env scripts/android-apk.mjs --lan"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

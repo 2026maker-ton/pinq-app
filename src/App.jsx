@@ -23,6 +23,15 @@ const transports = { walk: "도보", bike: "자전거", transit: "대중교통" 
 const kinds = { nature: "공원", culture: "문화", cafe: "카페", food: "식사" };
 const ROUTE_COLORS = ["#2563eb", "#e11d48", "#059669"];
 const statusCopy = { open: "영업 중", closed: "영업 종료", unknown: "영업 미확인" };
+const BUDGET_SLIDER_MAX = 200000;
+function clampBudget(n) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(10000000, Math.max(0, Math.round(n)));
+}
+function clampPeople(n) {
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(30, Math.max(1, Math.round(n)));
+}
 function placeQueryStatus(place, time = "13:00") {
   if (place?.business_status) return place.business_status;
   if (place?.openNow === true) return "open";
@@ -109,6 +118,8 @@ function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState([]);
+  const [budgetDraft, setBudgetDraft] = useState(null);
+  const [peopleDraft, setPeopleDraft] = useState(null);
   const generation = useRef(0);
   const cache = useRef(null);
   const abort = useRef(null);
@@ -377,12 +388,42 @@ function App() {
         {sheet !== "peek" && !results && <div className="sheet-expanded">
           <div className="section-title"><h2>탐색 조건</h2><span>조건을 바꾸면 코스를 다시 찾을 수 있어요</span></div>
           <div className="settings-grid">
-            <label>전체 예산<select aria-label="전체 예산" value={c.budget} onChange={(e) => change("budget", Number(e.target.value))}>
-              {[0, 20000, 40000, 60000, 80000, 100000, 150000, 200000].map((n) => <option key={n} value={n}>{n === 0 ? "무료" : money(n)}</option>)}
-            </select></label>
-            <label>인원<select aria-label="인원" value={c.people} onChange={(e) => change("people", Number(e.target.value))}>
-              {Array.from({ length: 30 }, (_, i) => <option key={i} value={i + 1}>{i + 1}명</option>)}
-            </select></label>
+            <label className="wide slide-field">전체 예산 <b>{c.budget === 0 ? "무료" : money(c.budget)}</b>
+              <input type="range" min="0" max={BUDGET_SLIDER_MAX} step="1000" aria-label="전체 예산 슬라이더" value={Math.min(c.budget, BUDGET_SLIDER_MAX)} onChange={(e) => { setBudgetDraft(null); change("budget", Number(e.target.value)); }} />
+              <span className="slide-input">
+                <input type="number" inputMode="numeric" min="0" max="10000000" step="1000" aria-label="전체 예산 직접 입력" value={budgetDraft ?? c.budget} onChange={(e) => {
+                  const raw = e.target.value;
+                  setBudgetDraft(raw);
+                  if (raw === "") return;
+                  const n = Number(raw);
+                  if (Number.isFinite(n)) change("budget", clampBudget(n));
+                }} onBlur={() => {
+                  if (budgetDraft == null) return;
+                  const n = clampBudget(Number(budgetDraft));
+                  setBudgetDraft(null);
+                  if (n !== c.budget) change("budget", n);
+                }} />
+                <em>원</em>
+              </span>
+            </label>
+            <label className="wide slide-field">인원 <b>{c.people}명</b>
+              <input type="range" min="1" max="30" step="1" aria-label="인원 슬라이더" value={c.people} onChange={(e) => { setPeopleDraft(null); change("people", Number(e.target.value)); }} />
+              <span className="slide-input">
+                <input type="number" inputMode="numeric" min="1" max="30" step="1" aria-label="인원 직접 입력" value={peopleDraft ?? c.people} onChange={(e) => {
+                  const raw = e.target.value;
+                  setPeopleDraft(raw);
+                  if (raw === "") return;
+                  const n = Number(raw);
+                  if (Number.isInteger(n)) change("people", clampPeople(n));
+                }} onBlur={() => {
+                  if (peopleDraft == null) return;
+                  const n = clampPeople(Number(peopleDraft));
+                  setPeopleDraft(null);
+                  if (n !== c.people) change("people", n);
+                }} />
+                <em>명</em>
+              </span>
+            </label>
             <label>이동 방법<select aria-label="이동 방법" value={c.transport} onChange={(e) => change("transport", e.target.value)}>
               <option value="walk" disabled={night}>도보</option><option value="bike" disabled={night}>자전거</option><option value="transit">대중교통</option>
             </select></label>
