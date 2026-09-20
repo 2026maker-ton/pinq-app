@@ -1,6 +1,5 @@
 import http from "node:http";
 import { createCourses, validate, demoPlaces, typicalStay, placeMapsUrl, unitPrice } from "../src/engine.mjs";
-import { isInYongsan } from "../src/region.mjs";
 const PORT = 3001;
 function normalizePlaces(input) {
   if (!Array.isArray(input) || input.length > 48)
@@ -23,7 +22,6 @@ function normalizePlaces(input) {
       Math.abs(p.lng) > 180
     )
       throw Error("장소 좌표가 잘못됐어요.");
-    if (!isInYongsan(p)) throw Error("용산구 밖 장소는 추천할 수 없어요.");
     const type = ["nature", "culture", "cafe", "food"].includes(p.type)
       ? p.type
       : "culture";

@@ -1,4 +1,4 @@
-import { coverageCenters, isInYongsan } from "./region.mjs";
+import { coverageCenters } from "./region.mjs";
 import { styleSearchGroups, typicalStay, unitPrice } from "./engine.mjs";
 
 let loading;
@@ -139,7 +139,7 @@ async function refineCoarse(Place, rank, selected, unique) {
       const children = (result.places ?? [])
         .filter((p) => p?.id && p.location && !["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"].includes(p.businessStatus))
         .map(mapPlace)
-        .filter((child) => isInYongsan(child) && !isCoarse(child) && !unique.has(child.id));
+        .filter((child) => !isCoarse(child) && !unique.has(child.id));
       if (children.length) replacements.push({ parent, children });
     } catch {
       // Keep the coarse place when the detail search fails.
@@ -174,13 +174,12 @@ export async function searchPlaces(c) {
       collected.push(...(result.value.places ?? []));
     }
   }
-  if (!successes) throw Error("용산구 장소 조회가 모두 실패했어요.");
+  if (!successes) throw Error("장소 조회가 모두 실패했어요.");
   const unique = new Map();
   for (const p of collected) {
     if (!p?.id || !p.location ||
         ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"].includes(p.businessStatus)) continue;
     const candidate = mapPlace(p);
-    if (!isInYongsan(candidate)) continue;
     unique.set(candidate.id, candidate);
   }
   const meters = (a, b) => {

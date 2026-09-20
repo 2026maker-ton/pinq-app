@@ -42,16 +42,21 @@ function metersBetween(a, b) {
 export function coverageCenters(origin, radius) {
   const centers = [origin];
   if (radius <= 1800) return centers;
+  const latSpan = radius / 111195;
+  const lngSpan = radius / (111195 * Math.max(0.2, Math.cos(origin.lat * Math.PI / 180)));
   const best = new Map();
-  for (let lat = YONGSAN_BOUNDS.south + .006; lat < YONGSAN_BOUNDS.north; lat += .012)
-    for (let lng = YONGSAN_BOUNDS.west + .007; lng < YONGSAN_BOUNDS.east; lng += .014) {
+  for (let lat = origin.lat - latSpan; lat <= origin.lat + latSpan + 1e-9; lat += .012)
+    for (let lng = origin.lng - lngSpan; lng <= origin.lng + lngSpan + 1e-9; lng += .014) {
       const point = { lat, lng };
       const distance = metersBetween(origin, point);
-      if (!isInYongsan(point) || distance > radius || distance < 900) continue;
+      if (distance > radius || distance < 900) continue;
       const sector = `${lat >= origin.lat ? "N" : "S"}${lng >= origin.lng ? "E" : "W"}`;
       if (!best.has(sector) || distance > best.get(sector).distance)
         best.set(sector, { point, distance });
     }
-  for (const { point } of best.values()) centers.push(point);
+  for (const { point } of best.values()) {
+    if (centers.length === 5) break;
+    centers.push(point);
+  }
   return centers;
 }

@@ -317,21 +317,33 @@ test("malformed model output falls back to deterministic courses", async () => {
     }
   }
 });
-test("Yongsan scope rejects outside origins and places", async () => {
+test("places are not limited to Yongsan", async () => {
   const outside = { lat: 37.5445, lng: 127.0438 };
   assert.ok(isInYongsan(ORIGIN));
   assert.equal(isInYongsan(outside), false);
-  assert.throws(() => validate({ ...c, origin: outside }), /용산구/);
-  const courses = createCourses([...DEMO, { ...DEMO[0], id: "outside", ...outside }], c);
-  assert.ok(courses.every((route) => route.stops.every((place) => place.id !== "outside")));
-  await assert.rejects(() => recommend({ conditions: c, places: [{ ...DEMO[0], ...outside }] }), /용산구/);
+  assert.doesNotThrow(() => validate({ ...c, origin: outside }));
+  const local = { ...DEMO[0], id: "outside", lat: outside.lat, lng: outside.lng };
+  const courses = createCourses([local], { ...c, origin: outside, radius: 3000, budget: 1000000 });
+  assert.ok(courses.some((route) => route.stops.some((place) => place.id === "outside")));
+  const rec = await recommend({
+    conditions: { ...c, origin: outside, radius: 3000, budget: 1000000 },
+    places: [{ ...DEMO[0], id: "out-place", lat: outside.lat, lng: outside.lng }],
+  });
+  assert.ok(rec.courses.some((route) => route.stops.some((place) => place.id === "out-place")));
 });
-test("district-wide search centers remain in Yongsan and inside the selected radius", () => {
+test("wide search centers stay inside the selected radius", () => {
   const centers = coverageCenters(ORIGIN, 8000);
   assert.ok(centers.length > 1 && centers.length <= 5);
-  assert.ok(centers.every(isInYongsan));
+  assert.equal(centers[0], ORIGIN);
+  const meters = (a, b) => {
+    const rad = (x) => (x * Math.PI) / 180;
+    const h = Math.sin(rad(a.lat - b.lat) / 2) ** 2 +
+      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(a.lng - b.lng) / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  };
+  assert.ok(centers.every((point) => meters(ORIGIN, point) <= 8000 + 1));
 });
-test("multi-center Places search deduplicates and excludes non-Yongsan results", async () => {
+test("multi-center Places search keeps places inside the radius", async () => {
   const previousWindow = globalThis.window;
   const requests = [];
   try {
@@ -346,7 +358,7 @@ test("multi-center Places search deduplicates and excludes non-Yongsan results",
       SearchNearbyRankPreference: { POPULARITY: "POPULARITY", DISTANCE: "DISTANCE" },
     }) } } };
     const result = await searchPlaces({ ...c, radius: 8000 });
-    assert.deepEqual(result.map((place) => place.id), ["inside"]);
+    assert.deepEqual(new Set(result.map((place) => place.id)), new Set(["inside", "outside"]));
     assert.ok(requests.length > 1 && requests.length <= 15);
     assert.ok(requests.every((request) => request.maxResultCount === 20));
     assert.ok(requests.every((request) => request.rankPreference === "DISTANCE"));

@@ -1,4 +1,4 @@
-import { isInYongsan, YONGSAN_CENTER } from "./region.mjs";
+import { YONGSAN_CENTER } from "./region.mjs";
 
 export const ORIGIN = YONGSAN_CENTER;
 const rows = [
@@ -611,8 +611,6 @@ export function validate(input) {
     Math.abs(c.origin.lng) > 180
   )
     throw Error("출발 좌표를 다시 선택해주세요.");
-  if (!isInYongsan(c.origin))
-    throw Error("출발점은 서울시 용산구 안에서 선택해주세요.");
   if (!Number.isInteger(c.people) || c.people < 1 || c.people > 30)
     throw Error("인원은 1~30명 사이의 정수로 입력해주세요.");
   if (!Number.isFinite(c.budget) || c.budget < 0 || c.budget > 10000000)
@@ -872,7 +870,6 @@ export function createCourses(raw, input) {
       p.price >= 0 &&
       Number.isFinite(p.stay) &&
       p.stay > 0 &&
-      isInYongsan(p) &&
       (!c.verifiedOnly || hoursKnown(p)) &&
       distance(c.origin, p) <= c.radius &&
       (p.capacity == null || p.capacity >= c.people),
@@ -1136,7 +1133,7 @@ export function demoPlaces(origin) {
     ...p,
     lat: origin.lat + p.lat - ORIGIN.lat,
     lng: origin.lng + p.lng - ORIGIN.lng,
-  })).filter(isInYongsan);
+  }));
 }
 export function clock(n) {
   return (

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { loadGoogleMaps } from "./maps.js";
-import { YONGSAN_BOUNDS, YONGSAN_FEATURES } from "./region.mjs";
 import { coursesFocus } from "./engine.mjs";
 
 export default function MapView({
@@ -50,7 +49,6 @@ export default function MapView({
           streetViewControl: false,
           fullscreenControl: false,
           zoomControl: false,
-          restriction: { latLngBounds: YONGSAN_BOUNDS, strictBounds: false },
         });
         instance.current = map;
         listener = map.addListener("click", (e) => {
@@ -69,17 +67,6 @@ export default function MapView({
       instance.current = null;
     };
   }, [demo]);
-  useEffect(() => {
-    if (demo || !instance.current || !window.google?.maps?.Polygon) return;
-    const maps = window.google.maps;
-    const outlines = YONGSAN_FEATURES.flatMap((feature) => feature.geometry.coordinates.map((polygon) => new maps.Polygon({
-      map: instance.current,
-      paths: polygon.map((ring) => ring.map(([lng, lat]) => ({ lat, lng }))),
-      strokeColor: "#4285f4", strokeOpacity: 0.48, strokeWeight: 1,
-      fillColor: "#4285f4", fillOpacity: 0.025, clickable: false,
-    })));
-    return () => outlines.forEach((outline) => outline.setMap(null));
-  }, [demo, ready]);
   useEffect(() => {
     if (demo || !instance.current) return;
     instance.current.setOptions({

@@ -3,7 +3,6 @@ import { Capacitor } from "@capacitor/core";
 import MapView from "./MapView.jsx";
 import { ORIGIN, createCourses, validate, money, clock, parseClock, toAgentConditions, styleSearchGroups, uniqueCourses, placeMapsUrl } from "./engine.mjs";
 import { searchPlaces } from "./maps.js";
-import { isInYongsan } from "./region.mjs";
 
 const EMPTY = [];
 const today = () => new Intl.DateTimeFormat("en-CA", {
@@ -321,7 +320,6 @@ function App() {
         stops={mapStops} places={results ? EMPTY : places} focused={focused ?? selectedPlace} bottomPadding={sheetHeight}
         onOrigin={(point) => {
           if (results) return;
-          if (!isInYongsan(point)) { setError("출발점은 서울시 용산구 안에서 선택해주세요."); setSheet("half"); return; }
           change("origin", point); setSheet("peek");
         }}
         onFocus={focusStop}
@@ -332,7 +330,7 @@ function App() {
     </div>
     <header className="floating-header">
       <div className="top-row">
-        <span className="header-caption">서울 용산구의 새로운 코스</span>
+        <span className="header-caption">주변에서 찾는 새로운 코스</span>
         <button className="icon-button" type="button" onClick={() => setDark((old) => !old)} aria-label={dark ? "라이트 모드" : "다크 모드"} title={dark ? "라이트 모드" : "다크 모드"}>{dark ? "☀" : "☾"}</button>
       </div>
       <form className="search-bar" onSubmit={results ? (event) => event.preventDefault() : explore}>
@@ -356,7 +354,7 @@ function App() {
     <div className="sheet-dock">
     <div className="map-tools">
       {!results && <div className="map-tools-row">
-        <span className="map-mode">서울 용산구 · Google 지도</span>
+        <span className="map-mode">Google 지도</span>
         <button type="button" onClick={() => setSheet("half")}>조건 조정 <span aria-hidden="true">↑</span></button>
       </div>}
     </div>
@@ -371,9 +369,9 @@ function App() {
           {results ? <div className="sheet-filter" role="group" aria-label="경로 정렬">
             <button type="button" className={routeSort === "distance" ? "is-on" : ""} aria-pressed={routeSort === "distance"} onClick={() => setRouteSort("distance")}>거리순</button>
             <button type="button" className={routeSort === "cost" ? "is-on" : ""} aria-pressed={routeSort === "cost"} onClick={() => setRouteSort("cost")}>비용순</button>
-          </div> : <span className="data-tag">용산구 탐색</span>}
+          </div> : <span className="data-tag">주변 탐색</span>}
         </div>
-        <p className="location-line">⌖ 서울 용산구 · 출발점 {c.origin.lat.toFixed(4)}, {c.origin.lng.toFixed(4)} <span>· 반경 {(c.radius / 1000).toFixed(1)}km</span></p>
+        <p className="location-line">⌖ 출발점 {c.origin.lat.toFixed(4)}, {c.origin.lng.toFixed(4)} <span>· 반경 {(c.radius / 1000).toFixed(1)}km</span></p>
         <p className="notice" role="status">{notice}</p>
         {error && <p className="error" role="alert">{error}</p>}
         {sheet !== "peek" && !results && <div className="sheet-expanded">
@@ -401,14 +399,14 @@ function App() {
             ) : (
               <label>끝 시각<input type="time" value={c.endTime} onChange={(e) => change("endTime", e.target.value)} /></label>
             )}
-            <label className="wide">용산구 내 탐색 반경 <b>{(c.radius / 1000).toFixed(1)}km</b><input type="range" min="300" max="8000" step="100" value={c.radius} onChange={(e) => change("radius", Number(e.target.value))} /></label>
+            <label className="wide">탐색 반경 <b>{(c.radius / 1000).toFixed(1)}km</b><input type="range" min="300" max="8000" step="100" value={c.radius} onChange={(e) => change("radius", Number(e.target.value))} /></label>
           </div>
           {night && <div className="warning-banner" role="status">☀ 21시~06시에는 도보·자전거 코스를 제외합니다. 대중교통 운행은 확인이 필요해요.</div>}
           <label className="setting-check"><input type="checkbox" checked={c.verifiedOnly} onChange={(e) => change("verifiedOnly", e.target.checked)} /> 영업시간 미확인 장소 제외</label>
           <button className="primary-button" onClick={explore} disabled={busy}>{busy ? "코스 만드는 중…" : dirty ? "조건으로 다시 찾기" : "나의 코스 찾기"} <span>↗</span></button>
           {!courses.length && !busy && !error && <div className="empty-state"><span className="empty-pin pulse-pin">📍</span><h3>지도 위에서 하루를 시작해보세요</h3><p>지도를 눌러 출발점을 고르고 <b>코스 찾기</b>를 눌러보세요.</p><button type="button" className="empty-cta" onClick={explore}>지금 바로 시작하기 ↗</button></div>}
-          {places.length > 0 && <section className="discovered-places" aria-label="용산구 발견 장소">
-            <div className="section-title"><h2>용산구에서 찾은 장소 <span>{places.length}</span></h2><span>지도의 점을 누르면 정보가 열려요</span></div>
+          {places.length > 0 && <section className="discovered-places" aria-label="발견한 장소">
+            <div className="section-title"><h2>주변에서 찾은 장소 <span>{places.length}</span></h2><span>지도의 점을 누르면 정보가 열려요</span></div>
             <div className="place-chips">{places.map((place) => <button key={place.id} className={selectedPlace === place.id ? "active" : ""} onClick={() => { setSelectedPlace(place.id); setFocused(null); }}>{place.name}</button>)}</div>
             {activePlace && <article className="place-detail"><small>{kinds[activePlace.type]} · Google 장소 · {statusCopy[activeStatus]}</small><h3>{activePlace.name}</h3><p>{activePlace.address}</p>
               {activePlace.hours && <details><summary>참고 영업시간</summary>{activePlace.hours}</details>}
