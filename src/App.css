@@ -38,11 +38,9 @@
 .cost-formula-sub{margin:2px 0 10px;font-size:11px;font-weight:600;color:var(--muted)}
 
 .sheet-stack{position:relative;width:100%;overflow:hidden;pointer-events:auto}
-.sheet-filter{position:relative;flex:0 0 auto}
-.sheet-filter>button{border:1px solid var(--line);background:var(--panel-solid);color:var(--blue-deep);border-radius:999px;padding:8px 12px;font-size:11px;font-weight:800}
-.sheet-filter-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:6;display:flex;flex-direction:column;min-width:118px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--panel-solid);box-shadow:var(--shadow)}
-.sheet-filter-menu button{border:0;background:transparent;text-align:left;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:800;color:var(--ink)}
-.sheet-filter-menu button.is-on{background:var(--blue-soft);color:var(--blue-deep)}
+.sheet-filter{display:flex;flex:0 0 auto;gap:6px}
+.sheet-filter button{border:1px solid var(--line);background:var(--panel-solid);color:var(--muted);border-radius:999px;padding:8px 10px;font-size:11px;font-weight:800}
+.sheet-filter button.is-on{border-color:var(--blue);background:var(--blue-soft);color:var(--blue-deep)}
 .route-cards{display:flex;flex-direction:column;gap:10px;margin-top:4px}
 .route-card{width:100%;display:flex;flex-direction:column;align-items:stretch;padding:4px;border:1px solid var(--line);border-radius:16px;background:var(--panel-solid);color:var(--ink)}
 .route-card.is-on{border-color:var(--chip-color,var(--blue));box-shadow:0 4px 16px color-mix(in srgb,var(--chip-color,var(--blue)) 22%,transparent)}

@@ -41,10 +41,16 @@ function MapsLink({ place }) {
   if (!href) return null;
   return <a className="maps-link" href={href} target="_blank" rel="noopener noreferrer">Google 지도에서 보기 ↗</a>;
 }
+function routeTotal(course) {
+  return Number(course?.estimated_cost?.total ?? course?.total) || 0;
+}
+function routeDistance(course) {
+  return Number(course?.distance) || 0;
+}
 function sortRoutes(courses, sort) {
   return [...courses].sort(sort === "cost"
-    ? (a, b) => (a.total - b.total) || (a.distance - b.distance)
-    : (a, b) => (a.distance - b.distance) || (a.total - b.total));
+    ? (a, b) => (routeTotal(a) - routeTotal(b)) || (routeDistance(a) - routeDistance(b))
+    : (a, b) => (routeDistance(a) - routeDistance(b)) || (routeTotal(a) - routeTotal(b)));
 }
 function RouteDetail({ route, c, focused, focusStop, cost }) {
   const costTotal = cost.total || 1;
@@ -101,7 +107,6 @@ function App() {
   const [notice, setNotice] = useState("지도를 누르거나 조건을 골라 코스를 찾아보세요.");
   const [dirty, setDirty] = useState(false);
   const [routeSort, setRouteSort] = useState("distance");
-  const [filterOpen, setFilterOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState([]);
@@ -164,7 +169,6 @@ function App() {
   }
   function resetResultsUi() {
     setDetailOpen(false);
-    setFilterOpen(false);
     setPicking(false);
     setPicked([]);
     setFocused(null);
@@ -252,7 +256,6 @@ function App() {
     setDetailOpen(true);
     setFocused(null);
     setSelectedPlace(null);
-    setFilterOpen(false);
   }
   function closeDetail() {
     setDetailOpen(false);
@@ -365,12 +368,9 @@ function App() {
       <div className="sheet-scroll">
         <div className="sheet-heading">
           <div><span className="eyebrow">{results ? "YOUR ROUTES" : "EXPLORE NEARBY"}</span><h1>{results ? `추천 경로 ${courses.length}개` : "어디로 떠나볼까요?"}</h1></div>
-          {results ? <div className="sheet-filter">
-            <button type="button" aria-expanded={filterOpen} aria-haspopup="menu" onClick={() => setFilterOpen((old) => !old)}>{routeSort === "cost" ? "비용순" : "거리순"}</button>
-            {filterOpen && <div className="sheet-filter-menu" role="menu">
-              <button type="button" role="menuitem" className={routeSort === "distance" ? "is-on" : ""} onClick={() => { setRouteSort("distance"); setFilterOpen(false); }}>거리순</button>
-              <button type="button" role="menuitem" className={routeSort === "cost" ? "is-on" : ""} onClick={() => { setRouteSort("cost"); setFilterOpen(false); }}>비용순</button>
-            </div>}
+          {results ? <div className="sheet-filter" role="group" aria-label="경로 정렬">
+            <button type="button" className={routeSort === "distance" ? "is-on" : ""} aria-pressed={routeSort === "distance"} onClick={() => setRouteSort("distance")}>거리순</button>
+            <button type="button" className={routeSort === "cost" ? "is-on" : ""} aria-pressed={routeSort === "cost"} onClick={() => setRouteSort("cost")}>비용순</button>
           </div> : <span className="data-tag">용산구 탐색</span>}
         </div>
         <p className="location-line">⌖ 서울 용산구 · 출발점 {c.origin.lat.toFixed(4)}, {c.origin.lng.toFixed(4)} <span>· 반경 {(c.radius / 1000).toFixed(1)}km</span></p>
@@ -441,7 +441,7 @@ function App() {
           {picking ? <div className="rerun-actions">
             <button type="button" className="ghost-button" onClick={() => { setPicking(false); setPicked([]); setError(""); }} disabled={busy}>취소</button>
             <button type="button" className="primary-button" onClick={rerunWithPicked} disabled={busy || !picked.length}>{busy ? "다시 찾는 중…" : "이 장소로 다시 찾기"}</button>
-          </div> : <button type="button" className="rerun-button" onClick={() => { setPicking(true); setDetailOpen(false); setFilterOpen(false); setError(""); setSheet("full"); }}>선택한 장소 기반으로 다시 찾기</button>}
+          </div> : <button type="button" className="rerun-button" onClick={() => { setPicking(true); setDetailOpen(false); setError(""); setSheet("full"); }}>선택한 장소 기반으로 다시 찾기</button>}
         </div>}
       </div>
     </section>
