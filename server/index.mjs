@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createCourses, validate, demoPlaces, typicalStay, placeMapsUrl } from "../src/engine.mjs";
+import { createCourses, validate, demoPlaces, typicalStay, placeMapsUrl, unitPrice } from "../src/engine.mjs";
 import { isInYongsan } from "../src/region.mjs";
 const PORT = 3001;
 function normalizePlaces(input) {
@@ -52,7 +52,7 @@ function normalizePlaces(input) {
       lng: p.lng,
       type,
       types,
-      price: { nature: 0, culture: 10000, cafe: 8000, food: 15000 }[type],
+      price: unitPrice({ type, demo: false }),
       stay: typicalStay({ type, types, demo: false }),
       capacity: null,
       local: null,
@@ -65,6 +65,13 @@ function normalizePlaces(input) {
       rating: Number.isFinite(p.rating) && p.rating >= 0 && p.rating <= 5 ? p.rating : null,
       ratingCount: Number.isInteger(p.ratingCount) && p.ratingCount >= 0 ? p.ratingCount : null,
       mapsUrl: placeMapsUrl(p),
+      wheelchairEntrance: p.wheelchairEntrance === true,
+      wheelchairParking: p.wheelchairParking === true,
+      wheelchairRestroom: p.wheelchairRestroom === true,
+      wheelchairSeating: p.wheelchairSeating === true,
+      barrierFree: p.wheelchairEntrance === true || p.wheelchairParking === true || p.barrierFree === true,
+      elevation: Number.isFinite(p.elevation) && p.elevation > -500 && p.elevation < 4000 ? p.elevation : null,
+      originElevation: Number.isFinite(p.originElevation) && p.originElevation > -500 && p.originElevation < 4000 ? p.originElevation : null,
       demo: false,
     };
   });
@@ -103,9 +110,14 @@ export async function recommend(body) {
                 preferences: { styles: c.styles, keyword: c.keyword, timeMode: c.timeMode, time: c.time, endTime: c.endTime, playHours: c.playHours },
                 candidates: courses.map((r) => ({
                   id: r.id,
-                  total: r.total,
                   duration: r.duration,
-                  stops: r.stops.map((p) => ({ name: p.name, type: p.type })),
+                  stops: r.stops.map((p) => ({
+                      name: p.name,
+                      type: p.type,
+                      wheelchairParking: p.wheelchairParking === true,
+                      wheelchairEntrance: p.wheelchairEntrance === true,
+                      grade: Number.isFinite(p.grade) ? p.grade : null,
+                    })),
                 })),
               }),
             },

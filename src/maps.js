@@ -1,5 +1,5 @@
 import { coverageCenters, isInYongsan } from "./region.mjs";
-import { styleSearchGroups, typicalStay } from "./engine.mjs";
+import { styleSearchGroups, typicalStay, unitPrice } from "./engine.mjs";
 
 let loading;
 export function loadGoogleMaps() {
@@ -39,7 +39,7 @@ const GROUPS = {
 };
 const DETAIL_TYPES = ["cafe", "bakery", "restaurant", "book_store", "art_gallery"];
 const COARSE_TYPES = new Set(["park", "tourist_attraction", "shopping_mall", "university", "stadium"]);
-const FIELDS = ["id", "displayName", "location", "formattedAddress", "types", "businessStatus", "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "googleMapsURI"];
+const FIELDS = ["id", "displayName", "location", "formattedAddress", "types", "businessStatus", "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "googleMapsURI", "accessibilityOptions"];
 
 function mapPeriods(hours) {
   return (hours?.periods ?? []).map((period) => ({
@@ -67,10 +67,10 @@ function mapPlace(p) {
     id: p.id,
     name: p.displayName ?? "이름 없는 장소",
     lat: p.location.lat(), lng: p.location.lng(), type, types,
-    // These are category estimates, never a Google menu or admission price.
-    price: { nature: 0, culture: 10000, cafe: 8000, food: 15000 }[type],
+    // Category estimate only: unitPrice(type) * people is computed in the engine.
+    price: unitPrice({ type, demo: false }),
     capacity: null, local: null, quiet: null,
-    keywords: { nature: "자연 공원 산책 휴식", culture: "문화 전시 책 관광", cafe: "커피 디저트 카페", food: "식사 먹거리" }[type],
+    keywords: { nature: "자연 공원 산책 휴식", culture: "문화 전시 관람", cafe: "커피 디저트 카페", food: "식사 먹거리" }[type],
     address: p.formattedAddress ?? "",
     hours: regular?.weekdayDescriptions?.join(" / ") ?? "",
     openNow: current?.openNow === true ? true : current?.openNow === false ? false : null,
@@ -79,6 +79,13 @@ function mapPlace(p) {
     ratingCount: Number.isInteger(p.userRatingCount) ? p.userRatingCount : null,
     mapsUrl: p.googleMapsURI ?? "",
     demo: false,
+    wheelchairEntrance: p.accessibilityOptions?.wheelchairAccessibleEntrance === true,
+    wheelchairParking: p.accessibilityOptions?.wheelchairAccessibleParking === true,
+    wheelchairRestroom: p.accessibilityOptions?.wheelchairAccessibleRestroom === true,
+    wheelchairSeating: p.accessibilityOptions?.wheelchairAccessibleSeating === true,
+    barrierFree: p.accessibilityOptions?.wheelchairAccessibleEntrance === true
+      || p.accessibilityOptions?.wheelchairAccessibleParking === true,
+    isHotspot: (p.userRatingCount || 0) >= 500,
   };
   mapped.stay = typicalStay(mapped);
   return mapped;
@@ -188,5 +195,29 @@ export async function searchPlaces(c) {
   const desired = groups.length === 1 ? { nature: 48, culture: 48, cafe: 48, food: 48 } :
     { nature: 12, culture: 16, cafe: 10, food: 10 };
   const selected = Object.entries(byType).flatMap(([type, list]) => pickPlaces(list, desired[type], c.origin));
-  return refineCoarse(Place, SearchNearbyRankPreference.DISTANCE, selected.slice(0, 48), unique);
+  const refined = await refineCoarse(Place, SearchNearbyRankPreference.DISTANCE, selected.slice(0, 48), unique);
+  if ((c.styles || []).includes("access"))
+    return attachElevations(maps, c.origin, refined);
+  return refined;
+}
+
+async function attachElevations(maps, origin, places) {
+  if (!places.length) return places;
+  try {
+    const lib = await maps.importLibrary("elevation");
+    const Service = lib?.ElevationService || maps.ElevationService;
+    if (!Service) return places;
+    const elevator = new Service();
+    const locations = [{ lat: origin.lat, lng: origin.lng }, ...places.map((p) => ({ lat: p.lat, lng: p.lng }))];
+    const payload = await elevator.getElevationForLocations({ locations });
+    const results = payload?.results || [];
+    const originElevation = Number(results[0]?.elevation);
+    return places.map((place, i) => ({
+      ...place,
+      elevation: Number(results[i + 1]?.elevation),
+      originElevation: Number.isFinite(originElevation) ? originElevation : null,
+    }));
+  } catch {
+    return places;
+  }
 }

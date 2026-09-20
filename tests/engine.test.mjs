@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ORIGIN, DEMO, validate, createCourses, toAgentConditions, coursesFocus, timeWindow, typicalStay, uniqueCourses, placeMapsUrl } from "../src/engine.mjs";
+import { ORIGIN, DEMO, validate, createCourses, toAgentConditions, coursesFocus, timeWindow, typicalStay, uniqueCourses, placeMapsUrl, unitPrice, partyCost, estimateCourseCost, TRANSIT_FARE } from "../src/engine.mjs";
 import { recommend } from "../server/index.mjs";
 import { coverageCenters, isInYongsan } from "../src/region.mjs";
 import { searchPlaces } from "../src/maps.js";
@@ -71,6 +71,32 @@ test("low-review places beat famous landmarks by default", () => {
   const ids = courses.flatMap((route) => route.stops.map((stop) => stop.id));
   assert.ok(ids.some((id) => id.startsWith("quiet")));
   assert.ok(ids.filter((id) => id.startsWith("quiet")).length >= ids.filter((id) => id.startsWith("famous")).length);
+});
+test("party cost is unit price times people without AI", () => {
+  assert.equal(partyCost(8000, 3), 24000);
+  assert.equal(partyCost(0, 5), 0);
+  const one = createCourses(DEMO, { ...c, people: 1, budget: 1000000 });
+  const three = createCourses(DEMO, { ...c, people: 3, budget: 1000000 });
+  assert.ok(one.length && three.length);
+  for (const route of [...one, ...three]) {
+    const people = route.estimated_cost.people;
+    let places = 0;
+    for (const stop of route.stops) {
+      assert.equal(stop.partyCost, stop.unitPrice * people);
+      assert.equal(stop.unitPrice, unitPrice(stop));
+      places += stop.partyCost;
+    }
+    const expected = estimateCourseCost(route.stops, { people, transport: "walk" });
+    assert.equal(route.food + route.play, places);
+    assert.equal(route.total, places + route.transit);
+    assert.equal(route.estimated_cost.total, expected.total);
+    assert.equal(route.estimated_cost.formula, "unit * people + transit");
+  }
+  const walk = estimateCourseCost(DEMO.slice(0, 2), { people: 2, transport: "walk" });
+  const transit = estimateCourseCost(DEMO.slice(0, 2), { people: 2, transport: "transit" });
+  assert.equal(transit.places, walk.places);
+  assert.equal(transit.transit, TRANSIT_FARE * 2 * 2);
+  assert.equal(transit.total, walk.places + transit.transit);
 });
 test("zero budget permits only free courses", () => {
   for (const r of createCourses(DEMO, { ...c, budget: 0 }))
@@ -151,6 +177,64 @@ test("exhibit and hidden keywords prefer museums and low-review places", () => {
   assert.ok(courses.length);
   const ids = courses.flatMap((r) => r.stops.map((s) => s.id));
   assert.ok(ids.filter((id) => id.startsWith("gem")).length >= ids.filter((id) => id.startsWith("famous")).length);
+});
+test("access keyword prefers parking and rejects steep or uneven places", () => {
+  const origin = { ...ORIGIN, elevation: 20 };
+  const parked = {
+    ...DEMO[0],
+    id: "access-parked",
+    wheelchairParking: true,
+    wheelchairEntrance: true,
+    elevation: 21,
+    originElevation: 20,
+    types: ["cafe"],
+  };
+  const steep = {
+    ...DEMO[1],
+    id: "access-steep",
+    wheelchairEntrance: true,
+    wheelchairParking: false,
+    elevation: 90,
+    originElevation: 20,
+    lat: ORIGIN.lat + 0.0008,
+    lng: ORIGIN.lng + 0.0002,
+    types: ["cafe"],
+  };
+  const playground = {
+    ...DEMO[2],
+    id: "access-rough",
+    type: "nature",
+    types: ["playground"],
+    wheelchairEntrance: false,
+    wheelchairParking: false,
+    elevation: 21,
+    originElevation: 20,
+    rough: true,
+  };
+  const pool = [
+    parked,
+    steep,
+    playground,
+    ...DEMO.map((p, i) => ({
+      ...p,
+      id: "access-flat" + i,
+      wheelchairEntrance: true,
+      wheelchairParking: true,
+      elevation: 21,
+      originElevation: 20,
+    })),
+  ];
+  const courses = createCourses(pool, { ...c, origin, styles: ["access"] });
+  assert.ok(courses.length);
+  const ids = courses.flatMap((route) => route.stops.map((stop) => stop.id));
+  assert.equal(ids.includes("access-steep"), false);
+  assert.equal(ids.includes("access-rough"), false);
+  assert.ok(ids.some((id) => id === "access-parked" || id.startsWith("access-flat")));
+  for (const route of courses)
+    for (const stop of route.stops) {
+      assert.ok(stop.wheelchairEntrance || stop.wheelchairParking || stop.wheelchairRestroom);
+      if (Number.isFinite(stop.grade)) assert.ok(stop.grade <= 0.08);
+    }
 });
 test("end time and play hours fill the same window", () => {
   const byEnd = createCourses(DEMO, { ...c, timeMode: "end", endTime: "14:00" });
@@ -319,4 +403,24 @@ test("placeMapsUrl keeps Google links and falls back to coordinates", () => {
   const [course] = createCourses(DEMO, c);
   for (const stop of course.stops)
     assert.match(placeMapsUrl(stop), /^https:\/\/www\.google\.com\/maps\/search\//);
+});
+test("mustInclude one place is on every course", () => {
+  const id = "demo0";
+  const courses = createCourses(DEMO, { ...c, budget: 1000000, radius: 3000, mustInclude: [id] });
+  assert.ok(courses.length >= 1);
+  for (const route of courses)
+    assert.ok(route.stops.some((stop) => stop.id === id));
+});
+test("mustInclude three places is covered by two or three courses", () => {
+  const ids = ["demo0", "demo1", "demo2"];
+  const courses = createCourses(DEMO, {
+    ...c,
+    budget: 1000000,
+    radius: 3000,
+    mustInclude: ids,
+    limit: 3,
+  });
+  assert.ok(courses.length >= 2 && courses.length <= 3);
+  const covered = new Set(courses.flatMap((route) => route.stops.map((stop) => stop.id)));
+  for (const id of ids) assert.ok(covered.has(id));
 });

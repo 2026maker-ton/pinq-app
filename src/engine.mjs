@@ -187,6 +187,11 @@ export const DEMO = rows.map((r, i) => ({
   keywords: r[11],
   closedDays: i === 4 ? [1] : i === 7 ? [0] : [],
   demo: true,
+  wheelchairEntrance: i % 2 === 0,
+  wheelchairParking: i % 3 === 0,
+  wheelchairRestroom: i === 0 || i === 5,
+  elevation: 19 + (i % 3),
+  originElevation: 20,
 }));
 export const money = (n) => Math.round(n).toLocaleString("ko-KR") + "원";
 const GOOGLE_MAPS_HOST = /^(www\.|maps\.)?google\.[a-z.]+$/i;
@@ -210,7 +215,8 @@ export function placeMapsUrl(place) {
   if (id) url.searchParams.set("query_place_id", id);
   return url.toString().slice(0, 500);
 }
-export const STYLE_ENUM = ["relaxed", "tight", "eager", "play", "exhibit", "food", "hidden"];
+export const STYLE_ENUM = ["relaxed", "tight", "eager", "play", "exhibit", "food", "hidden", "access"];
+const ACCESS_GRADE_LIMIT = 0.08;
 const STYLE_WHY = {
   relaxed: "한가함",
   tight: "빡빡함",
@@ -219,6 +225,7 @@ const STYLE_WHY = {
   exhibit: "관람",
   food: "먹거리",
   hidden: "숨은명소",
+  access: "교통약자",
 };
 function hasStyle(c, id) {
   return Array.isArray(c?.styles) && c.styles.includes(id);
@@ -229,6 +236,34 @@ function isMealPlace(place) {
 function isExhibitPlace(place) {
   const types = Array.isArray(place?.types) ? place.types : [];
   return place?.type === "culture" || types.some((t) => t === "museum" || t === "art_gallery");
+}
+function accessFlags(place) {
+  return {
+    entrance: place?.wheelchairEntrance === true || place?.barrierFree === true,
+    parking: place?.wheelchairParking === true,
+    restroom: place?.wheelchairRestroom === true,
+    seating: place?.wheelchairSeating === true,
+  };
+}
+export function isAccessFriendly(place) {
+  const flags = accessFlags(place);
+  return flags.entrance || flags.parking || flags.restroom || flags.seating;
+}
+export function isUnevenPlace(place) {
+  const types = Array.isArray(place?.types) ? place.types : [];
+  return place?.rough === true || types.includes("playground") || types.includes("campground") || types.includes("hiking_area");
+}
+function pointElevation(point, place) {
+  if (Number.isFinite(point?.elevation)) return Number(point.elevation);
+  if (Number.isFinite(place?.originElevation)) return Number(place.originElevation);
+  return null;
+}
+export function pathGrade(from, to) {
+  const start = pointElevation(from, to);
+  const end = Number.isFinite(to?.elevation) ? Number(to.elevation) : null;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const meters = Math.max(distance(from, to) * 1.3, 1);
+  return Math.abs(end - start) / meters;
 }
 function isHiddenGem(place) {
   const rating = Number(place?.rating);
@@ -313,8 +348,41 @@ export function travelMinutes(meters, transport) {
     ) + (transport === "transit" ? 8 : 0)
   );
 }
+export const UNIT_PRICE = { nature: 0, culture: 10000, cafe: 8000, food: 15000 };
+export const TRANSIT_FARE = 1600;
+export function unitPrice(place) {
+  if (place?.demo && Number.isFinite(place.price) && place.price >= 0) return place.price;
+  return UNIT_PRICE[place?.type] ?? UNIT_PRICE.culture;
+}
+export function partyCost(unit, people) {
+  const n = Number.isInteger(people) && people > 0 ? people : 1;
+  return Math.max(0, Number(unit) || 0) * n;
+}
+export function transitCost(people, legs, transport) {
+  if (transport !== "transit") return 0;
+  return partyCost(TRANSIT_FARE, people) * Math.max(0, Number(legs) || 0);
+}
+export function estimateCourseCost(stops, c) {
+  const people = c.people;
+  let food = 0, play = 0, shop = 0, publicCost = 0;
+  const lines = [];
+  for (const stop of stops || []) {
+    const unit = unitPrice(stop);
+    const amount = partyCost(unit, people);
+    const kind = ["cafe", "food"].includes(stop.type) ? "food" : "play";
+    if (kind === "food") food += amount;
+    else play += amount;
+    const who = payee(stop);
+    if (who === "public") publicCost += amount;
+    else shop += amount;
+    lines.push({ id: stop.id, unit, people, amount, kind, payee: who });
+  }
+  const transit = transitCost(people, (stops || []).length, c.transport);
+  const places = food + play;
+  return { food, play, transit, shop, public: publicCost, places, total: places + transit, people, lines };
+}
 function stopCost(place, c) {
-  return place.price * c.people + (c.transport === "transit" ? c.people * 1600 : 0);
+  return partyCost(unitPrice(place), c.people) + transitCost(c.people, 1, c.transport);
 }
 const PUBLIC_TYPES = [
   "park",
@@ -360,9 +428,12 @@ export function stayMinutes(place, c) {
 }
 export function moveMinutes(meters, c) {
   const base = travelMinutes(meters, c?.transport);
-  if (hasStyle(c, "relaxed")) return Math.round(base * 1.5);
-  if (hasStyle(c, "eager")) return Math.max(2, Math.round(base * 0.8));
-  return base;
+  let minutes = base;
+  if (hasStyle(c, "relaxed")) minutes = Math.round(base * 1.5);
+  else if (hasStyle(c, "eager")) minutes = Math.max(2, Math.round(base * 0.8));
+  if (hasStyle(c, "access") && c?.transport !== "transit")
+    minutes = Math.max(3, Math.round(minutes * 1.25));
+  return minutes;
 }
 export function payee(place) {
   const types = Array.isArray(place?.types) ? place.types : [];
@@ -391,6 +462,14 @@ export function placeWhy(place, c, arrival) {
     else if (arrival >= 1050 && arrival <= 1170) why.push("저녁");
   }
   if (why.length >= 2) return why.slice(0, 2);
+  if (hasStyle(c, "access")) {
+    if (place.wheelchairParking && !why.includes("휠체어주차")) why.push("휠체어주차");
+    if (why.length < 2 && (place.wheelchairEntrance || place.barrierFree) && !why.includes("입구접근"))
+      why.push("입구접근");
+    if (why.length < 2 && Number.isFinite(place.grade) && place.grade <= 0.03 && !why.includes("완만"))
+      why.push("완만");
+    if (why.length >= 2) return why.slice(0, 2);
+  }
   for (const style of c.styles || []) {
     if (why.length >= 2) break;
     const tag = STYLE_WHY[style];
@@ -426,7 +505,15 @@ export function normalizeConditions(input = {}) {
     input.total_budget?.amount ??
     (Number.isFinite(input.total_budget) ? input.total_budget : undefined);
   return {
-    origin: origin ? { lat: origin.lat, lng: origin.lng } : origin,
+    origin: origin
+      ? {
+          lat: origin.lat,
+          lng: origin.lng,
+          ...(Number.isFinite(origin.elevation)
+            ? { elevation: origin.elevation }
+            : {}),
+        }
+      : origin,
     radius: input.radius ?? input.search_radius,
     transport: input.transport ?? input.transportation,
     people: input.people ?? input.party_size,
@@ -485,9 +572,12 @@ export function shapeCourse(route, c) {
       food: route.food,
       play: route.play,
       transit: route.transit,
+      places: route.food + route.play,
       total: route.total,
       shop: route.shop,
       public: route.public,
+      people: c.people,
+      formula: "unit * people + transit",
     },
     route_info: {
       estimated: true,
@@ -587,14 +677,23 @@ function visitStep(place, prev, t, end, c, weekday, spent) {
     return null;
   const cost = stopCost(place, c);
   if (spent + cost > c.budget) return null;
-  return { meters, minutes, arrival, leave, business_status, cost, stay };
+  const fromElev = pointElevation(prev, place);
+  const toElev = Number.isFinite(place?.elevation) ? Number(place.elevation) : null;
+  const rise = Number.isFinite(fromElev) && Number.isFinite(toElev) ? toElev - fromElev : null;
+  const grade = Number.isFinite(rise) ? (meters >= 12 ? Math.abs(rise) / meters : 0) : null;
+  if (hasStyle(c, "access")) {
+    if (isUnevenPlace(place) && !accessFlags(place).parking) return null;
+    if (Number.isFinite(grade) && grade > ACCESS_GRADE_LIMIT) return null;
+  }
+  return { meters, minutes, arrival, leave, business_status, cost, stay, rise, grade };
 }
 function skipPlace(place, c) {
   const count = Number(place?.ratingCount);
   if (hasStyle(c, "hidden") && Number.isFinite(count) && count > 400) return true;
+  if (hasStyle(c, "access") && isUnevenPlace(place) && !accessFlags(place).parking) return true;
   return false;
 }
-function packCourse(seed, candidates, c, start, end, weekday) {
+function packCourse(seed, candidates, c, start, end, weekday, required = []) {
   const used = new Set();
   const stops = [];
   let prev = c.origin,
@@ -612,14 +711,28 @@ function packCourse(seed, candidates, c, start, end, weekday) {
       meters: step.meters,
       business_status: step.business_status,
       payee: payee(place),
-      why: placeWhy(place, c, step.arrival),
+      unitPrice: unitPrice(place),
+      partyCost: partyCost(unitPrice(place), c.people),
+      grade: step.grade,
+      rise: step.rise,
+      why: placeWhy({ ...place, grade: step.grade }, c, step.arrival),
     });
     t = step.leave;
     totalMeters += step.meters;
     spent += step.cost;
     prev = place;
   };
-  if (seed) {
+  const requiredList = [...required].filter(Boolean).sort(
+    (a, b) => distance(c.origin, a) - distance(c.origin, b),
+  );
+  for (const place of requiredList) {
+    if (used.has(place.id)) continue;
+    if (skipPlace(place, c)) return null;
+    const step = visitStep(place, prev, t, end, c, weekday, spent);
+    if (!step) return null;
+    add(place, step);
+  }
+  if (seed && !used.has(seed.id)) {
     if (skipPlace(seed, c)) return null;
     const step = visitStep(seed, prev, t, end, c, weekday, spent);
     if (!step) return null;
@@ -636,32 +749,27 @@ function packCourse(seed, candidates, c, start, end, weekday) {
         ? (isHiddenGem(place) ? -160 : fame(place) * 40)
         : fame(place) * 90;
       const eagerBias = hasStyle(c, "eager") ? step.stay : 0;
-      const rank = step.meters - typeBonus + hiddenBias + eagerBias;
+      const flags = accessFlags(place);
+      const accessBias = hasStyle(c, "access")
+        ? (flags.parking ? -160 : 0)
+          + (flags.entrance ? -80 : 0)
+          + (flags.restroom ? -40 : 0)
+          + (Number.isFinite(step.grade) ? step.grade * 4000 : 0)
+          + (place.type === "nature" && !flags.parking ? 90 : 0)
+        : 0;
+      const rank = step.meters - typeBonus + hiddenBias + eagerBias + accessBias;
       if (!best || rank < best.rank) best = { place, step, rank };
     }
     if (!best) break;
     add(best.place, best.step);
   }
   if (!stops.length) return null;
+  if (requiredList.some((place) => !used.has(place.id))) return null;
   const last = stops[stops.length - 1];
   const duration = last.arrival + last.stay - start;
-  const food =
-    stops
-      .filter((p) => ["cafe", "food"].includes(p.type))
-      .reduce((s, p) => s + p.price, 0) * c.people;
-  const play =
-    stops
-      .filter((p) => !["cafe", "food"].includes(p.type))
-      .reduce((s, p) => s + p.price, 0) * c.people;
-  const transit = c.transport === "transit" ? c.people * 1600 * stops.length : 0;
-  const total = food + play + transit;
-  if (total > c.budget) return null;
-  const shop =
-    stops.filter((p) => p.payee === "shop").reduce((s, p) => s + p.price, 0) *
-    c.people;
-  const publicCost =
-    stops.filter((p) => p.payee === "public").reduce((s, p) => s + p.price, 0) *
-    c.people;
+  const cost = estimateCourseCost(stops, c);
+  if (cost.total > c.budget) return null;
+  const { food, play, transit, shop, public: publicCost, total } = cost;
   const local = stops.filter((p) => p.local).length,
     quiet = stops.filter((p) => p.quiet).length,
     diversity = new Set(stops.map((p) => p.type)).size;
@@ -713,25 +821,49 @@ function sectorSeeds(origin, candidates) {
 function usedNearby(place, takenStops, meters = 200) {
   return takenStops.some((stop) => distance(place, stop) < meters);
 }
-function majoritySame(a, b) {
-  const left = new Set((a?.stops || []).map((stop) => stop.id));
-  const right = new Set((b?.stops || []).map((stop) => stop.id));
+function majoritySame(a, b, ignore = new Set()) {
+  const left = new Set(
+    (a?.stops || []).map((stop) => stop.id).filter((id) => !ignore.has(id)),
+  );
+  const right = new Set(
+    (b?.stops || []).map((stop) => stop.id).filter((id) => !ignore.has(id)),
+  );
   if (!left.size || !right.size) return false;
   const overlap = [...left].filter((id) => right.has(id)).length;
   return overlap / new Set([...left, ...right]).size >= 0.5;
 }
-export function uniqueCourses(courses, limit = 3) {
+export function uniqueCourses(courses, limit = 3, ignoreIds = []) {
+  const ignore = new Set(ignoreIds);
   const kept = [];
   for (const course of courses || []) {
     if (!course?.stops?.length) continue;
-    if (kept.some((other) => majoritySame(other, course))) continue;
+    if (kept.some((other) => majoritySame(other, course, ignore))) continue;
     kept.push(course);
     if (kept.length === limit) break;
   }
   return kept;
 }
+function splitMustInclude(places, origin, count) {
+  const n = Math.min(3, Math.max(2, count));
+  if (!places.length) return [];
+  if (places.length <= n) return places.map((place) => [place]);
+  const buckets = Array.from({ length: n }, () => []);
+  for (const place of places) {
+    const angle = Math.atan2(place.lng - origin.lng, place.lat - origin.lat);
+    buckets[Math.floor(((angle + Math.PI) / (2 * Math.PI)) * n) % n].push(place);
+  }
+  const filled = buckets.filter((bucket) => bucket.length);
+  if (filled.length >= 2) return filled;
+  const ordered = [...places].sort(
+    (a, b) => distance(origin, a) - distance(origin, b),
+  );
+  const size = Math.ceil(ordered.length / n);
+  return Array.from({ length: n }, (_, i) =>
+    ordered.slice(i * size, (i + 1) * size),
+  ).filter((group) => group.length);
+}
 export function createCourses(raw, input) {
-  const c = validate(input);
+  let c = validate(input);
   let candidates = raw.filter(
     (p) =>
       Number.isFinite(p.lat) &&
@@ -754,6 +886,14 @@ export function createCourses(raw, input) {
   if (hasStyle(c, "hidden")) {
     const gems = candidates.filter(isHiddenGem);
     if (gems.length >= 4) candidates = gems;
+  }
+  if (hasStyle(c, "access")) {
+    candidates = candidates.filter((p) => !isUnevenPlace(p) || accessFlags(p).parking);
+    const friendly = candidates.filter(isAccessFriendly);
+    if (friendly.length >= 4) candidates = friendly;
+    const sample = candidates.find((p) => Number.isFinite(p.originElevation));
+    if (sample && !Number.isFinite(c.origin.elevation))
+      c = { ...c, origin: { ...c.origin, elevation: sample.originElevation } };
   }
   const tokens = c.keyword
     .trim()
@@ -790,10 +930,10 @@ export function createCourses(raw, input) {
           Math.max(0, Math.floor(span / 3)),
         );
   const packEnd = end - slackReserve > start ? end - slackReserve : end;
-  const tryPack = (seed, pool) =>
-    packCourse(seed, pool, c, start, packEnd, weekday) ||
+  const tryPack = (seed, pool, required = []) =>
+    packCourse(seed, pool, c, start, packEnd, weekday, required) ||
     (packEnd < end
-      ? packCourse(seed, pool, c, start, end, weekday)
+      ? packCourse(seed, pool, c, start, end, weekday, required)
       : null);
   const ordered = [...candidates].sort(
     (a, b) => fame(a) - fame(b) || distance(c.origin, a) - distance(c.origin, b),
@@ -805,35 +945,190 @@ export function createCourses(raw, input) {
     seenSeed.add(place.id);
     seedList.push(place);
   }
+  const mustIds = Array.isArray(input.mustInclude)
+    ? [
+        ...new Set(
+          input.mustInclude.filter(
+            (id) => typeof id === "string" && id.length > 0 && id.length < 200,
+          ),
+        ),
+      ].slice(0, 24)
+    : [];
+  const limit =
+    Number.isInteger(input.limit) && input.limit >= 2 && input.limit <= 3
+      ? input.limit
+      : 3;
+  const mustPlaces = mustIds
+    .map((id) => candidates.find((place) => place.id === id))
+    .filter(Boolean);
+  const sharedRequired = mustPlaces.length > 0 && mustPlaces.length < 3;
+  const groups =
+    mustPlaces.length >= 3
+      ? splitMustInclude(mustPlaces, c.origin, limit)
+      : mustPlaces.length
+        ? [mustPlaces]
+        : [[]];
+  const sharedIds = new Set(
+    sharedRequired ? mustPlaces.map((place) => place.id) : [],
+  );
   const packed = [];
   const taken = new Set();
   const takenStops = [];
-  for (const allowOverlap of [0, 1]) {
-    for (const seed of [null, ...seedList]) {
-      if (seed && allowOverlap === 0 && (taken.has(seed.id) || usedNearby(seed, takenStops))) continue;
-      const pool = candidates.filter((place) => {
-        if (taken.has(place.id)) return allowOverlap > 0;
-        if (allowOverlap === 0 && usedNearby(place, takenStops)) return false;
-        return true;
-      });
-      const route = tryPack(seed && (allowOverlap > 0 || !taken.has(seed.id)) ? seed : null, pool);
-      if (!route || packed.some((r) => r.id === route.id || majoritySame(r, route))) continue;
-      const overlap = route.stops.filter((stop) => taken.has(stop.id) || usedNearby(stop, takenStops)).length;
-      if (overlap > allowOverlap) continue;
-      const last = route.stops[route.stops.length - 1];
-      route.slack = Math.max(0, end - (last.arrival + last.stay));
-      route.score -= overlap * 25;
-      packed.push(route);
-      for (const stop of route.stops) {
-        taken.add(stop.id);
-        takenStops.push(stop);
-      }
-      if (packed.length === 3) break;
+  const poolFor = (allowOverlap, extraIds = []) => {
+    const keep = new Set([...sharedIds, ...extraIds]);
+    return candidates.filter((place) => {
+      if (keep.has(place.id)) return true;
+      if (taken.has(place.id)) return allowOverlap > 0;
+      if (allowOverlap === 0 && usedNearby(place, takenStops)) return false;
+      return true;
+    });
+  };
+  const pushRoute = (route, allowOverlap) => {
+    if (!route || packed.some((r) => r.id === route.id || majoritySame(r, route, sharedIds)))
+      return false;
+    const overlap = route.stops.filter((stop) => {
+      if (sharedIds.has(stop.id)) return false;
+      return taken.has(stop.id) || usedNearby(stop, takenStops);
+    }).length;
+    if (overlap > allowOverlap) return false;
+    const last = route.stops[route.stops.length - 1];
+    route.slack = Math.max(0, end - (last.arrival + last.stay));
+    route.score -= overlap * 25;
+    packed.push(route);
+    for (const stop of route.stops) {
+      if (sharedIds.has(stop.id)) continue;
+      taken.add(stop.id);
+      takenStops.push(stop);
     }
-    if (packed.length === 3) break;
+    return true;
+  };
+  if (mustPlaces.length >= 3) {
+    for (const allowOverlap of [0, 1]) {
+      for (const group of groups) {
+        if (packed.length === limit) break;
+        pushRoute(
+          tryPack(null, poolFor(allowOverlap, group.map((place) => place.id)), group),
+          allowOverlap,
+        );
+      }
+      if (packed.length === limit) break;
+    }
+    if (packed.length < 2) {
+      for (const group of groups) {
+        for (const seed of seedList) {
+          if (packed.length === limit) break;
+          pushRoute(tryPack(seed, candidates, group), 1);
+        }
+      }
+    }
+    const uncovered = () =>
+      mustPlaces.filter(
+        (place) => !packed.some((route) => route.stops.some((stop) => stop.id === place.id)),
+      );
+    for (const allowOverlap of [0, 1, 8]) {
+      const missing = uncovered();
+      if (!missing.length || packed.length === limit) break;
+      for (const place of missing) {
+        if (packed.length === limit) break;
+        pushRoute(
+          tryPack(place, poolFor(allowOverlap, [place.id]), [place]),
+          allowOverlap,
+        );
+      }
+    }
+    for (const place of uncovered()) {
+      const extra = tryPack(place, candidates, [place]);
+      if (!extra) continue;
+      if (packed.length < limit) {
+        pushRoute(extra, 8);
+        continue;
+      }
+      const drop = packed.findIndex((route) => {
+        const uniqueMust = mustPlaces.filter(
+          (must) =>
+            route.stops.some((stop) => stop.id === must.id) &&
+            !packed.some(
+              (other) =>
+                other !== route && other.stops.some((stop) => stop.id === must.id),
+            ),
+        );
+        return uniqueMust.length === 0;
+      });
+      if (drop < 0) break;
+      packed.splice(drop, 1);
+      taken.clear();
+      takenStops.length = 0;
+      for (const route of packed) {
+        for (const stop of route.stops) {
+          taken.add(stop.id);
+          takenStops.push(stop);
+        }
+      }
+      pushRoute(extra, 8);
+    }
+  } else {
+    for (const allowOverlap of [0, 1]) {
+      for (const seed of [null, ...seedList]) {
+        if (packed.length === limit) break;
+        if (
+          seed &&
+          allowOverlap === 0 &&
+          !sharedIds.has(seed.id) &&
+          (taken.has(seed.id) || usedNearby(seed, takenStops))
+        )
+          continue;
+        const route = tryPack(
+          seed && (sharedIds.has(seed.id) || allowOverlap > 0 || !taken.has(seed.id))
+            ? seed
+            : null,
+          poolFor(allowOverlap),
+          mustPlaces,
+        );
+        if (
+          mustPlaces.length &&
+          route &&
+          !mustPlaces.every((place) => route.stops.some((stop) => stop.id === place.id))
+        )
+          continue;
+        pushRoute(route, allowOverlap);
+      }
+      if (packed.length === limit) break;
+    }
   }
   packed.sort((a, b) => b.score - a.score);
-  return uniqueCourses(packed.map((route) => shapeCourse(route, c)));
+  const kept = uniqueCourses(
+    packed.map((route) => shapeCourse(route, c)),
+    limit,
+    [...sharedIds],
+  );
+  if (mustPlaces.length < 3) return kept;
+  const missing = () =>
+    mustPlaces.filter(
+      (place) => !kept.some((route) => route.stops.some((stop) => stop.id === place.id)),
+    );
+  for (const place of missing()) {
+    const extra = tryPack(place, candidates, [place]);
+    if (!extra) continue;
+    const shaped = shapeCourse(extra, c);
+    if (kept.some((route) => route.id === shaped.id)) continue;
+    if (kept.length < limit) {
+      kept.push(shaped);
+      continue;
+    }
+    const drop = kept.findIndex((route) => {
+      const uniqueMust = mustPlaces.filter(
+        (must) =>
+          route.stops.some((stop) => stop.id === must.id) &&
+          !kept.some(
+            (other) =>
+              other !== route && other.stops.some((stop) => stop.id === must.id),
+          ),
+      );
+      return uniqueMust.length === 0;
+    });
+    kept.splice(drop < 0 ? kept.length - 1 : drop, 1, shaped);
+  }
+  return kept;
 }
 // Demonstration coordinates are generated around the selected origin; these are fictional places.
 export function demoPlaces(origin) {
